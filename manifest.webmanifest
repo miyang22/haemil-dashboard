@@ -1,0 +1,39 @@
+{
+  "name": "해밀홈케어 매출·비용 관리",
+  "short_name": "해밀홈케어",
+  "description": "에어컨 세척 작업의 기종별 대수만 입력하면 매출이 자동 계산되는 해밀홈케어 장부 앱. 월·분기·반기·연간 요약과 비용 관리를 한 화면에서.",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f9fb",
+  "theme_color": "#072b35",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
