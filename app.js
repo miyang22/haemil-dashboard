@@ -18,7 +18,15 @@ const DEFAULT_TYPES = [
   { id: 'biz',       name: '업소용·기타',   price: 220000, active: true }
 ];
 
-const DEFAULT_CATS = ['약품·자재비', '유류·주차·통행비', '광고·마케팅비', '식대·기타경비', '장비유지비'];
+/* 기본 비용 분류 — 앞의 5개 순서는 예시 기록(seedSample)에서 위치로 참조하므로 바꾸지 않습니다. */
+const DEFAULT_CATS = ['약품·자재비', '유류·주차·통행비', '광고·마케팅비', '식대·기타경비', '장비유지비', '커피', '담배'];
+
+/* 이미 앱을 써 오던 기기에 '커피'·'담배' 를 한 번만 더해 주는 마이그레이션 (v2)
+   - 한 번 실행한 뒤 표시를 남기므로, 사용자가 나중에 직접 지운 분류는 다시 생기지 않습니다.
+   - 기존 기록·직접 만든 분류는 건드리지 않고 이름이 없을 때만 목록 끝에 붙입니다. */
+const CAT_MIGRATION_KEY = 'haemil.dashboard.catMigrationV2';
+const CAT_MIGRATION_V2_ADD = ['커피', '담배'];
+
 const DEFAULT_MEMOS = ['서울 마포 · 아파트', '경기 성남 · 오피스텔', '서울 송파 · 상가', '인천 연수 · 빌라'];
 
 const PALETTE = ['#0a94b8', '#2fc0ad', '#7cc9e3', '#ef9a54', '#8d7bea', '#e2727f', '#4bb3a5', '#c9a227', '#5b8def', '#b0895f'];
@@ -228,18 +236,41 @@ function normalize(raw) {
   return data;
 }
 
+/* v2 비용 분류 마이그레이션: 저장된 데이터에 '커피'·'담배' 가 없으면 더한다. */
+function migrateCategoriesV2(data) {
+  if (!data) return data;
+  let done = false;
+  try { done = localStorage.getItem(CAT_MIGRATION_KEY) === '1'; } catch (err) { done = false; }
+  if (done) return data;
+
+  const names = new Set((data.expenseCategories || []).map(c => c.name));
+  let added = 0;
+  CAT_MIGRATION_V2_ADD.forEach(name => {
+    if (names.has(name)) return;
+    data.expenseCategories.push({ id: uid(), name });
+    names.add(name);
+    added += 1;
+  });
+  // 분류 목록과 마이그레이션 표시를 바로 함께 저장해, 앱을 곧 닫아도 결과가 남게 합니다.
+  try {
+    if (added) localStorage.setItem(LS_KEY, JSON.stringify(data));
+    localStorage.setItem(CAT_MIGRATION_KEY, '1');
+  } catch (err) { /* 저장 불가 환경은 다음 실행에서 다시 시도 */ }
+  return data;
+}
+
 function load() {
   let raw = null;
   try { raw = localStorage.getItem(LS_KEY); } catch (err) { raw = null; }
   if (raw) {
     try {
       const data = normalize(JSON.parse(raw));
-      if (data) return data;
+      if (data) return migrateCategoriesV2(data);
     } catch (err) {
       console.warn('저장된 데이터를 읽지 못했습니다.', err);
     }
   }
-  return freshData();
+  return migrateCategoriesV2(freshData());
 }
 
 let saveTimer = null;
@@ -880,6 +911,54 @@ function saveSale(e) {
 }
 
 /* ------------------------------ 비용 ------------------------------ */
+/** 분류 추가 — 비용 탭 ‘+ 항목 추가’ 와 관리 탭 입력이 함께 씁니다. */
+function addExpenseCategory(name) {
+  const clean = String(name == null ? '' : name).trim().replace(/\s+/g, ' ');
+  if (!clean) return { ok: false, reason: 'empty' };
+  const dup = state.data.expenseCategories.find(c => c.name.toLowerCase() === clean.toLowerCase());
+  if (dup) return { ok: false, reason: 'dup', id: dup.id, name: dup.name };
+  const cat = { id: uid(), name: clean };
+  state.data.expenseCategories.push(cat);
+  save();
+  return { ok: true, id: cat.id, name: clean };
+}
+
+function setQuickCatOpen(open) {
+  const box = $('#catQuickAdd');
+  const btn = $('#catQuickToggle');
+  if (!box || !btn) return;
+  box.hidden = !open;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    $('#quickCatName').focus();
+  } else {
+    $('#quickCatName').value = '';
+  }
+}
+
+function saveQuickCategory() {
+  const input = $('#quickCatName');
+  const res = addExpenseCategory(input.value);
+
+  if (!res.ok && res.reason === 'empty') {
+    toast('분류 이름을 입력해 주세요.');
+    input.focus();
+    return;
+  }
+  if (!res.ok && res.reason === 'dup') {
+    buildExpenseCats(res.id);
+    setQuickCatOpen(false);
+    toast('이미 있는 분류입니다 · ‘' + res.name + '’을(를) 선택했습니다.');
+    return;
+  }
+
+  buildExpenseCats(res.id);   // 새 분류를 비용 폼에서 바로 선택
+  renderManage();            // 관리 탭 목록과 개수도 같이 갱신
+  setQuickCatOpen(false);
+  $('#expenseCategory').focus();
+  toast('‘' + res.name + '’ 분류를 추가했습니다.');
+}
+
 function buildExpenseCats(selectedId) {
   const sel = $('#expenseCategory');
   sel.innerHTML = state.data.expenseCategories.map(c =>
@@ -1342,6 +1421,15 @@ function wireEvents() {
   });
 
   // 관리: 비용 분류
+  $('#catQuickToggle').addEventListener('click', () => {
+    setQuickCatOpen($('#catQuickAdd').hidden);
+  });
+  $('#quickCatSubmit').addEventListener('click', saveQuickCategory);
+  $('#quickCatName').addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); saveQuickCategory(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); setQuickCatOpen(false); $('#expenseCategory').focus(); }
+  });
+
   $('#catManageList').addEventListener('input', ev => {
     const row = ev.target.closest('.manage-row');
     if (!row) return;
@@ -1354,13 +1442,12 @@ function wireEvents() {
   });
   $('#addCatForm').addEventListener('submit', ev => {
     ev.preventDefault();
-    const name = $('#newCatName').value.trim();
-    if (!name) { toast('분류 이름을 입력해 주세요.'); return; }
-    state.data.expenseCategories.push({ id: uid(), name });
+    const res = addExpenseCategory($('#newCatName').value);
+    if (!res.ok && res.reason === 'empty') { toast('분류 이름을 입력해 주세요.'); return; }
+    if (!res.ok && res.reason === 'dup') { toast('이미 있는 분류입니다 · ‘' + res.name + '’'); return; }
     $('#newCatName').value = '';
-    save();
     renderManage();
-    buildExpenseCats();
+    buildExpenseCats($('#expenseCategory').value || res.id);
     toast('분류를 추가했습니다.');
   });
 

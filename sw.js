@@ -7,7 +7,7 @@
    ========================================================================== */
 'use strict';
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE_PREFIX = 'haemil-dashboard-';
 const CACHE_NAME = CACHE_PREFIX + VERSION;
 

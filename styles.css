@@ -482,6 +482,29 @@ select {
 .money-input { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
 
 .field-row { display: grid; gap: 0 10px; }
+.field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* 비용 탭 분류 옆 빠른 추가 */
+.link-add {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--brand-dark);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.link-add:hover,
+.link-add[aria-expanded="true"] { background: var(--brand-soft); border-color: var(--brand); }
+.link-add:active { transform: translateY(1px); }
+
+.quick-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.quick-add[hidden] { display: none; }
+.quick-add input { padding: 8px 10px; font-size: 14px; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 /* 대수 입력 행 */

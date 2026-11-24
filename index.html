@@ -186,8 +186,15 @@
               <input type="date" id="expenseDate" required>
             </div>
             <div class="field">
-              <label for="expenseCategory">분류</label>
+              <div class="field-head">
+                <label for="expenseCategory">분류</label>
+                <button type="button" class="link-add" id="catQuickToggle" aria-expanded="false" aria-controls="catQuickAdd">+ 항목 추가</button>
+              </div>
               <select id="expenseCategory"></select>
+              <div class="quick-add" id="catQuickAdd" hidden>
+                <input type="text" id="quickCatName" placeholder="새 분류 이름 (예: 커피)" aria-label="새 비용 분류 이름" autocomplete="off" maxlength="20">
+                <button type="button" class="btn btn-sm" id="quickCatSubmit">추가</button>
+              </div>
             </div>
           </div>
 
