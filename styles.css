@@ -450,6 +450,10 @@ main { padding: 14px 16px 0; }
 input[type="text"],
 input[type="date"],
 input[type="number"],
+input[type="email"],
+input[type="tel"],
+input[type="search"],
+input[type="password"],
 select,
 textarea {
   width: 100%;
@@ -679,8 +683,8 @@ select {
   left: 0; right: 0; bottom: 0;
   z-index: 40;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 6px 2px calc(6px + env(safe-area-inset-bottom));
   background: rgba(255, 255, 255, .96);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -691,14 +695,16 @@ select {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 6px 2px;
+  min-width: 0;
+  padding: 6px 0;
   border: 0;
   border-radius: 12px;
   background: transparent;
   color: #8aa4ae;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
 }
 .bn-btn svg {
   width: 22px; height: 22px;
@@ -815,4 +821,487 @@ select {
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+/* ==========================================================================
+   견적서 (Quotation)
+   ========================================================================== */
+
+.qh-actions { display: flex; align-items: center; gap: 8px; }
+
+.q-fold {
+  margin: 2px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--ice);
+  padding: 10px 12px;
+}
+.q-fold > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink-2);
+  letter-spacing: -0.02em;
+}
+.q-fold > summary::-webkit-details-marker { display: none; }
+.q-fold > summary::before {
+  content: "▸ ";
+  color: var(--brand);
+}
+.q-fold[open] > summary::before { content: "▾ "; }
+.q-fold > summary .muted { display: block; font-weight: 600; margin-top: 2px; }
+.q-fold[open] > summary { margin-bottom: 10px; }
+
+.q-sup-grid { display: grid; gap: 0 10px; }
+.q-sup-grid .field { margin-bottom: 9px; }
+.q-sup-grid .q-span2 { grid-column: 1 / -1; }
+
+.q-items-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.q-items-head h3 { font-size: 14px; font-weight: 800; }
+
+.q-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.q-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.q-chip em { font-style: normal; font-size: 11px; font-weight: 700; color: var(--muted); }
+.q-chip:hover { border-color: var(--brand); background: var(--brand-soft); }
+.q-chip:active { transform: translateY(1px); }
+.q-chips .empty-chip { font-size: 12px; color: var(--muted); font-weight: 600; padding: 8px 2px; }
+
+.q-thead { display: none; }
+
+.q-rows { display: grid; }
+
+.q-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "name name del"
+    "spec unit qty"
+    "price price amount";
+  gap: 6px;
+  padding: 9px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ice);
+}
+.q-row input { padding: 8px 10px; font-size: 14px; border-radius: 10px; }
+.q-row .qr-name { grid-area: name; font-weight: 700; }
+.q-row .qr-spec { grid-area: spec; }
+.q-row .qr-unit { grid-area: unit; }
+.q-row .qr-qty { grid-area: qty; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; }
+.q-row .qr-price { grid-area: price; }
+.q-row .qr-amount {
+  grid-area: amount;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.q-row .qr-amount b { font-size: 13px; color: var(--brand-dark); font-weight: 800; }
+.q-row .qr-del {
+  grid-area: del;
+  justify-self: end;
+  align-self: start;
+  width: 32px; height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1;
+}
+.q-row .qr-del:hover { background: var(--danger-soft); border-color: #f0c6c8; }
+
+.q-items-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 800; color: var(--ink-2); cursor: pointer; }
+.switch input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 40px; height: 23px;
+  flex: 0 0 40px;
+  margin: 0; padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #cfe2e9;
+  position: relative;
+  transition: background .15s ease;
+  cursor: pointer;
+}
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(7, 43, 53, .25);
+  transition: left .15s ease;
+}
+.switch input:checked { background: var(--brand); }
+.switch input:checked::after { left: 20px; }
+
+.q-sum {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--brand-soft);
+}
+.q-sum-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.q-sum-cell span { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.q-sum-cell strong {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.q-sum-total { grid-column: 1 / -1; padding-top: 8px; border-top: 1px dashed #c3dde7; }
+.q-sum-total strong { font-size: 21px; color: var(--brand-dark); }
+.q-hangul {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--ink-2);
+  word-break: keep-all;
+}
+
+#qNotes { min-height: 180px; line-height: 1.6; font-size: 14px; resize: vertical; }
+
+.q-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0 8px; }
+.q-actions .btn { padding: 12px 10px; font-size: 13.5px; }
+#quoteEmail { background: #fff; border-color: var(--brand); color: var(--brand-dark); }
+
+/* ---- 발행 내역 ---- */
+.q-history { list-style: none; margin: 0; padding: 0; display: grid; }
+.q-history li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.q-history li:last-child { border-bottom: 0; }
+.q-history .qh-top { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.q-history .qh-no { font-size: 13px; font-weight: 800; color: var(--ink); }
+.q-history .qh-date { font-size: 11.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.q-history .qh-amount {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--brand-dark);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.q-history .qh-sub { grid-column: 1 / -1; font-size: 12.5px; color: var(--muted); line-height: 1.5; word-break: keep-all; }
+.q-history .qh-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.q-history .qh-actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+.q-history .qh-actions button:hover { background: var(--ice); border-color: var(--brand); }
+.q-history .qh-actions button.del { color: var(--danger); border-color: #f0cdcf; }
+.q-history .qh-actions button.del:hover { background: var(--danger-soft); }
+.q-history .qh-actions button.sales { color: var(--brand-dark); border-color: #bfe0ea; background: var(--brand-soft); }
+.q-history li.empty { display: block; }
+
+/* ---- A4 미리보기 ---- */
+.q-preview-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  padding: 10px 0;
+  background:
+    repeating-linear-gradient(45deg, #eef4f6 0 10px, #e9f2f5 10px 20px);
+}
+.q-preview-wrap .qsheet { box-shadow: 0 12px 30px -18px rgba(7, 43, 53, .5); }
+
+/* ==========================================================================
+   A4 견적서 (화면·인쇄·이미지 공통 모양) — 단위 mm 로 실물 비율 유지
+   ========================================================================== */
+.qsheet {
+  width: 210mm;
+  min-height: 297mm;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 17.1mm 15.3mm 8mm 14.4mm;
+  background: #fff;
+  color: #111;
+  font-family: var(--font);
+  font-size: 2.8mm;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  display: flex;
+  flex-direction: column;
+  transform-origin: top left;
+}
+.qsheet * { box-sizing: border-box; }
+
+.qs-head {
+  display: grid;
+  grid-template-columns: 39mm minmax(0, 1fr) 39mm;
+  border-top: 0.45mm solid #111;
+  border-bottom: 0.45mm solid #111;
+}
+.qs-cell { padding: 1.2mm 2mm; min-height: 10mm; min-width: 0; }
+.qs-head > .qs-cell + .qs-cell { border-left: 0.25mm solid #111; }
+.qs-date, .qs-no { display: flex; flex-direction: column; justify-content: space-between; gap: 1mm; }
+.qs-lbl { font-size: 2.2mm; font-weight: 400; letter-spacing: 0.02em; color: #111; }
+.qs-date strong, .qs-no strong { font-size: 2.9mm; font-weight: 700; }
+.qs-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-size: 7mm;
+  font-weight: 800;
+  letter-spacing: 3.1mm;
+  text-indent: 3.1mm;
+  white-space: nowrap;
+}
+
+.qs-parties { display: grid; grid-template-columns: 92.1mm minmax(0, 1fr); gap: 1.3mm; align-items: stretch; }
+.qs-left { display: flex; flex-direction: column; min-width: 0; }
+.qs-recv {
+  border-left: 0.25mm solid #111;
+  border-right: 0.25mm solid #111;
+  border-bottom: 0.25mm solid #111;
+  display: grid;
+}
+.qs-rrow {
+  display: grid;
+  grid-template-columns: 24mm minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1mm;
+  padding: 1.2mm 2mm;
+  min-height: 6.2mm;
+}
+.qs-rrow + .qs-rrow { border-top: 0.25mm solid #111; }
+.qs-rrow-recv { min-height: 18mm; }
+.qs-rlbl { font-size: 2.8mm; }
+.qs-rval { font-size: 2.7mm; text-align: center; white-space: pre-line; word-break: keep-all; min-width: 0; }
+.qs-rrow-recv .qs-rval { text-align: right; font-size: 3mm; font-weight: 700; line-height: 1.4; }
+.qs-rgwi { font-size: 2.8mm; padding-left: 1mm; white-space: nowrap; }
+
+.qs-lead { margin: auto 0 1.6mm 1.4mm; font-size: 3.2mm; }
+
+.qs-sup {
+  border: 0.25mm solid #111;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  min-height: 46.6mm;
+}
+.qs-sup-title {
+  border-bottom: 0.25mm solid #111;
+  text-align: center;
+  font-size: 3.1mm;
+  font-weight: 700;
+  letter-spacing: 0.9em;
+  text-indent: 0.9em;
+  padding: 1.4mm 0;
+}
+.qs-srow { display: grid; align-items: center; }
+.qs-srow + .qs-srow { border-top: 0.25mm solid #111; }
+.qs-srow > * + * { border-left: 0.25mm solid #111; }
+.qs-srow-name { grid-template-columns: 16.5mm minmax(0, 1fr); }
+.qs-srow-regno { grid-template-columns: 16.5mm 20.4mm 12.9mm minmax(0, 1fr) 12.3mm; }
+.qs-srow-addr { grid-template-columns: 16.5mm minmax(0, 1fr); align-items: stretch; }
+.qs-srow-addr .qs-sval-wrap { white-space: pre-line; }
+.qs-srow-tel { grid-template-columns: 16.5mm 20.4mm 12.9mm minmax(0, 1fr); }
+.qs-slbl { font-size: 2.6mm; padding: 1.2mm 1.4mm; white-space: nowrap; }
+.qs-slbl-in { font-size: 2.5mm; }
+.qs-slbl-top { padding-top: 1.8mm; }
+.qs-srow-addr .qs-slbl { align-self: start; }
+.qs-sval { font-size: 2.6mm; padding: 1.2mm 1.6mm; min-width: 0; word-break: break-all; }
+.qs-srow-name .qs-sval { text-align: center; font-size: 2.9mm; }
+.qs-sval-bold { font-weight: 700; }
+.qs-sval-wrap { white-space: pre-line; }
+.qs-sval-email { word-break: break-all; }
+.qs-in { font-size: 2.5mm; text-align: center; padding: 1.2mm 0; white-space: nowrap; }
+
+.qs-totalband {
+  display: grid;
+  grid-template-columns: 58mm 15mm minmax(0, 1fr) 40mm;
+  align-items: center;
+  padding: 2.2mm 0;
+  border-top: 0.45mm solid #111;
+  border-bottom: 0.45mm solid #111;
+}
+.qs-total-label { padding-left: 1.2mm; font-size: 2.9mm; font-weight: 700; white-space: nowrap; }
+.qs-total-label em { font-style: normal; font-weight: 400; font-size: 2.4mm; }
+.qs-total-word { text-align: center; font-size: 2.8mm; }
+.qs-total-hangul { text-align: center; font-weight: 700; font-size: 3.4mm; word-break: keep-all; }
+.qs-total-won { text-align: right; padding-right: 1.2mm; font-weight: 700; font-size: 3mm; white-space: nowrap; }
+
+.qs-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  border-left: 0.25mm solid #111;
+  border-right: 0.25mm solid #111;
+}
+.qs-table .qc-name { width: 53mm; }
+.qs-table .qc-spec { width: 22.8mm; }
+.qs-table .qc-unit { width: 13.3mm; }
+.qs-table .qc-qty { width: 12.9mm; }
+.qs-table .qc-price { width: 26.9mm; }
+.qs-table .qc-supply { width: 26.5mm; }
+.qs-table .qc-tax { width: 24.9mm; }
+.qs-table th {
+  font-size: 2.7mm;
+  font-weight: 700;
+  text-align: center;
+  padding: 1.4mm 1mm;
+  border-bottom: 0.25mm solid #111;
+  border-left: 0.25mm solid #111;
+  white-space: nowrap;
+}
+.qs-table th:first-child { border-left: 0; }
+.qs-table td {
+  height: 7.9mm;
+  padding: 0.8mm 1.6mm;
+  font-size: 2.7mm;
+  border-bottom: 0.25mm solid #111;
+  border-left: 0.25mm solid #111;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qs-table tbody td:first-child { border-left: 0; }
+.qs-table td.qs-num { text-align: right; font-variant-numeric: tabular-nums; }
+.qs-table td.qs-name-cell { text-align: center; }
+.qs-table tbody tr.qs-filler td { color: transparent; }
+.qs-table tfoot td {
+  border-top: 0.45mm solid #111;
+  border-bottom: 0;
+  height: 7.7mm;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.qs-table tfoot td.qs-sum-lbl { text-align: center; border-left: 0; }
+.qs-table tfoot td:last-child { border-right: 0; }
+
+.qs-note {
+  display: grid;
+  grid-template-columns: 34.4mm minmax(0, 1fr);
+  border-left: 0.25mm solid #111;
+  border-right: 0.25mm solid #111;
+  border-bottom: 0.25mm solid #111;
+}
+.qs-note-lbl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.8mm;
+  border-right: 0.25mm solid #111;
+  padding: 1mm;
+}
+.qs-note-text {
+  padding: 2mm 3mm;
+  font-size: 2.6mm;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+.qs-note:first-of-type { min-height: 58mm; }
+.qs-note:first-of-type .qs-note-text { min-height: 54mm; }
+.qs-account { border-bottom-width: 0.45mm; min-height: 8.3mm; }
+.qs-account .qs-note-text { display: flex; align-items: center; }
+
+/* 화면에서 미리보기 목적: 인쇄/이미지에 영향 없음 */
+@media (min-width: 760px) {
+  .q-thead {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 84px 54px 54px 104px 116px 32px;
+    gap: 6px;
+    padding: 0 11px 6px;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: var(--muted);
+  }
+  .q-row {
+    grid-template-columns: minmax(0, 1fr) 84px 54px 54px 104px 116px 32px;
+    grid-template-areas: "name spec unit qty price amount del";
+    align-items: center;
+  }
+  .q-row .qr-del { align-self: center; }
+  .q-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .q-sup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .q-sum { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; }
+  .q-sum-total { grid-column: auto; border-top: 0; padding-top: 0; }
+  .q-hangul { grid-column: 1 / -1; }
+  #qNotes { min-height: 210px; }
+}
+
+@media (min-width: 900px) {
+  .q-chips { gap: 8px; }
+  .q-chip { font-size: 13px; }
+  .q-history li { grid-template-columns: minmax(0, 1fr) auto; }
+}
+
+/* ==========================================================================
+   인쇄 — 화면 껍데기는 숨기고 A4 견적서 한 장만
+   ========================================================================== */
+#printRoot { display: none; }
+
+@media print {
+  @page { size: A4; margin: 0; }
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    width: 210mm;
+  }
+  .app, .toast, noscript { display: none !important; }
+  #printRoot { display: block !important; }
+  #printRoot .qsheet {
+    margin: 0 !important;
+    box-shadow: none !important;
+    transform: none !important;
+    min-height: 0;
+  }
 }

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#072b35">
-<meta name="description" content="해밀홈케어 에어컨 세척 매출·비용 관리 대시보드. 기종별 대수 입력으로 매출이 자동 계산되고, 월·분기·반기·연간으로 정리됩니다.">
-<title>해밀홈케어 · 매출·비용 관리</title>
+<meta name="description" content="해밀홈케어 에어컨 세척 매출·비용·견적 관리 대시보드. 기종별 대수 입력으로 매출이 자동 계산되고, A4 견적서를 바로 인쇄·이미지·메일로 보낼 수 있습니다.">
+<title>해밀홈케어 · 매출·비용·견적</title>
 
 <!-- 홈 화면에 설치(PWA) -->
 <link rel="manifest" href="./manifest.webmanifest">
@@ -27,13 +27,14 @@
       <span class="brand-mark" aria-hidden="true">해</span>
       <span class="brand-text">
         <strong>해밀홈케어</strong>
-        <span>매출·비용 관리</span>
+        <span>매출·비용·견적</span>
       </span>
     </div>
 
     <nav class="topnav" aria-label="주요 메뉴">
       <button type="button" class="nav-btn is-active" data-tab="summary">요약</button>
       <button type="button" class="nav-btn" data-tab="entry">매출 입력</button>
+      <button type="button" class="nav-btn" data-tab="quote">견적서</button>
       <button type="button" class="nav-btn" data-tab="expense">비용</button>
       <button type="button" class="nav-btn" data-tab="manage">관리</button>
     </nav>
@@ -105,6 +106,14 @@
 
       <div class="panel">
         <div class="panel-head">
+          <h2>현장별 매출</h2>
+          <span class="muted" id="siteNote"></span>
+        </div>
+        <ul class="bar-list" id="siteList"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
           <h2>매출 기록</h2>
           <span class="muted" id="salesNote"></span>
         </div>
@@ -168,6 +177,245 @@
             </div>
           </div>
         </form>
+      </div>
+    </section>
+
+    <!-- ================= 견적서 ================= -->
+    <section class="tab-panel" id="tab-quote" aria-label="견적서">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>견적서 작성</h2>
+          <div class="qh-actions">
+            <span class="muted" id="quoteMode"></span>
+            <button type="button" class="btn btn-soft btn-sm" id="quoteNew">새 견적</button>
+          </div>
+        </div>
+
+        <form id="quoteForm" novalidate>
+          <div class="field-row">
+            <div class="field">
+              <label for="qDate">작성일</label>
+              <input type="date" id="qDate">
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <label for="qNo">견적번호</label>
+                <button type="button" class="link-add" id="qNoAuto">번호 자동</button>
+              </div>
+              <input type="text" id="qNo" placeholder="2026-001" autocomplete="off" inputmode="numeric">
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="qReceiver">수신 <span class="muted">(기관 · 담당자)</span></label>
+              <input type="text" id="qReceiver" placeholder="예: ○○아파트 관리사무소 담당자님" autocomplete="off" list="receiverPresets">
+              <datalist id="receiverPresets"></datalist>
+            </div>
+            <div class="field">
+              <label for="qReceiverEmail">수신 이메일</label>
+              <input type="email" id="qReceiverEmail" placeholder="상대방 메일 주소" autocomplete="off" inputmode="email">
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label for="qRef">참조</label>
+              <input type="text" id="qRef" placeholder="참조 (없으면 비워 두세요)" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="qValid">유효기간</label>
+              <input type="text" id="qValid" placeholder="작성일로부터 1주일간" autocomplete="off">
+            </div>
+          </div>
+
+          <details class="q-fold">
+            <summary>공급자 정보 <span class="muted">한 번 입력하면 이 기기에 저장되어 계속 쓰입니다</span></summary>
+            <div class="q-sup-grid">
+              <div class="field"><label for="qSupName">상호</label><input type="text" id="qSupName" autocomplete="off"></div>
+              <div class="field"><label for="qSupPerson">성명</label><input type="text" id="qSupPerson" autocomplete="off"></div>
+              <div class="field"><label for="qSupRegno">등록번호</label><input type="text" id="qSupRegno" placeholder="사업자등록번호" autocomplete="off"></div>
+              <div class="field"><label for="qSupTel">TEL</label><input type="text" id="qSupTel" inputmode="tel" autocomplete="off"></div>
+              <div class="field"><label for="qSupEmail">E-mail</label><input type="email" id="qSupEmail" placeholder="공급자 메일" autocomplete="off" inputmode="email"></div>
+              <div class="field"><label for="qSupAccount">계좌정보</label><input type="text" id="qSupAccount" placeholder="예: ○○은행 123-456-789012" autocomplete="off"></div>
+              <div class="field q-span2"><label for="qSupAddr">주소</label><input type="text" id="qSupAddr" placeholder="사업장 주소" autocomplete="off"></div>
+            </div>
+            <p class="hint">여기 적은 내용은 이 브라우저에만 저장되고 깃허브 공개 페이지에는 올라가지 않습니다. 견적서를 만들 때마다 자동으로 채워집니다.</p>
+          </details>
+
+          <div class="q-items-head">
+            <h3>품목 선택</h3>
+            <span class="muted">기종을 누르면 단가까지 자동으로 들어갑니다</span>
+          </div>
+          <div class="q-chips" id="qTypeChips"></div>
+
+          <div class="q-thead" aria-hidden="true">
+            <span>품목</span><span>규격/사양</span><span>단위</span><span>수량</span><span>단가</span><span>공급가액</span><span></span>
+          </div>
+          <div class="q-rows" id="quoteRows"></div>
+          <div class="q-items-foot">
+            <button type="button" class="btn btn-secondary btn-sm" id="quoteAddRow">+ 품목 줄 추가</button>
+            <label class="switch">
+              <input type="checkbox" id="qVat" checked>
+              <span>부가세 10% 포함</span>
+            </label>
+          </div>
+
+          <div class="q-sum">
+            <div class="q-sum-cell"><span>공급가액</span><strong id="qSupply">0원</strong></div>
+            <div class="q-sum-cell"><span>세액</span><strong id="qTax">0원</strong></div>
+            <div class="q-sum-cell q-sum-total"><span>합계금액</span><strong id="qTotal">0원</strong></div>
+            <p class="q-hangul" id="qHangul">일금 영 원정</p>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="qNotes">비고 · 계약 조건</label>
+              <button type="button" class="link-add" id="qNotesReset">기본 문구로</button>
+            </div>
+            <textarea id="qNotes" rows="12" spellcheck="false"></textarea>
+            <p class="hint">줄바꿈 그대로 견적서에 들어갑니다. 매번 같은 문구를 지우지 않아도 되도록 마지막 내용이 저장됩니다.</p>
+          </div>
+
+          <div class="q-actions">
+            <button type="button" class="btn btn-secondary" id="quotePrint">PDF 저장 · 인쇄</button>
+            <button type="button" class="btn btn-secondary" id="quotePng">이미지 저장(PNG)</button>
+            <button type="button" class="btn btn-secondary" id="quoteEmail">이메일 발송</button>
+            <button type="button" class="btn" id="quoteSave">견적서 저장</button>
+          </div>
+          <p class="hint" id="emailModeHint"></p>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>미리보기 (A4)</h2>
+          <span class="muted">인쇄·이미지 저장은 이 모양 그대로 나옵니다</span>
+        </div>
+        <div class="q-preview-wrap" id="quotePreviewWrap">
+          <div class="qsheet" id="quoteSheet">
+            <div class="qs-head">
+              <div class="qs-cell qs-date">
+                <span class="qs-lbl">DATE</span>
+                <strong id="qsDate">–</strong>
+              </div>
+              <div class="qs-cell qs-title">견 적 서</div>
+              <div class="qs-cell qs-no">
+                <span class="qs-lbl">No.</span>
+                <strong id="qsNo">–</strong>
+              </div>
+            </div>
+
+            <div class="qs-parties">
+              <div class="qs-left">
+                <div class="qs-recv">
+                  <div class="qs-rrow qs-rrow-recv">
+                    <span class="qs-rlbl">수신</span>
+                    <span class="qs-rval" id="qsReceiver"></span>
+                    <span class="qs-rgwi">귀중</span>
+                  </div>
+                  <div class="qs-rrow">
+                    <span class="qs-rlbl">참조</span>
+                    <span class="qs-rval" id="qsRef"></span>
+                  </div>
+                  <div class="qs-rrow">
+                    <span class="qs-rlbl">유효기간</span>
+                    <span class="qs-rval" id="qsValid"></span>
+                  </div>
+                </div>
+                <p class="qs-lead">아래와 같이 견적합니다.</p>
+              </div>
+
+              <div class="qs-sup">
+                <div class="qs-sup-title">공 급 자</div>
+                <div class="qs-srow qs-srow-name">
+                  <span class="qs-slbl">상호</span>
+                  <span class="qs-sval qs-sval-bold" id="qsSupName"></span>
+                </div>
+                <div class="qs-srow qs-srow-regno">
+                  <span class="qs-slbl">등록번호</span>
+                  <span class="qs-sval" id="qsSupRegno"></span>
+                  <span class="qs-slbl qs-slbl-in">성명</span>
+                  <span class="qs-sval" id="qsSupPerson"></span>
+                  <span class="qs-in">(인)</span>
+                </div>
+                <div class="qs-srow qs-srow-addr">
+                  <span class="qs-slbl qs-slbl-top">주소</span>
+                  <span class="qs-sval qs-sval-wrap" id="qsSupAddr"></span>
+                </div>
+                <div class="qs-srow qs-srow-tel">
+                  <span class="qs-slbl">TEL</span>
+                  <span class="qs-sval" id="qsSupTel"></span>
+                  <span class="qs-slbl qs-slbl-in">E-mail</span>
+                  <span class="qs-sval qs-sval-email" id="qsSupEmail"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="qs-totalband">
+              <span class="qs-total-label">합계금액 <em id="qsTotalEm">(세액포함)</em></span>
+              <span class="qs-total-word">일금</span>
+              <span class="qs-total-hangul" id="qsHangul"></span>
+              <span class="qs-total-won" id="qsWon"></span>
+            </div>
+
+            <table class="qs-table">
+              <colgroup>
+                <col class="qc-name"><col class="qc-spec"><col class="qc-unit">
+                <col class="qc-qty"><col class="qc-price"><col class="qc-supply"><col class="qc-tax">
+              </colgroup>
+              <thead>
+                <tr><th>품목</th><th>규격/사양</th><th>단위</th><th>수량</th><th>단가</th><th>공급가액</th><th>세액</th></tr>
+              </thead>
+              <tbody id="qsItems"></tbody>
+              <tfoot>
+                <tr><td class="qs-sum-lbl">합계</td><td></td><td></td><td></td><td></td><td id="qsSupplySum"></td><td id="qsGrandSum"></td></tr>
+              </tfoot>
+            </table>
+
+            <div class="qs-note">
+              <span class="qs-note-lbl">비고</span>
+              <div class="qs-note-text" id="qsNotes"></div>
+            </div>
+            <div class="qs-note qs-account">
+              <span class="qs-note-lbl">계좌정보</span>
+              <div class="qs-note-text" id="qsAccount"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>발행 내역</h2>
+          <span class="muted" id="quoteHistoryNote"></span>
+        </div>
+        <ul class="q-history" id="quoteHistoryList"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>이메일 발송 설정</h2>
+          <span class="muted" id="emailCfgState"></span>
+        </div>
+        <p class="hint">설정하지 않아도 <strong>이메일 발송</strong>을 누르면 폰의 메일 앱이 견적 내용으로 채워진 채 열립니다(받는 사람·내 메일 함께). EmailJS를 연결하면 앱에서 바로 상대방과 내 메일로 동시에 발송됩니다.</p>
+        <div class="field">
+          <label for="qMyEmail">내 메일 <span class="muted">(동시 발송 · 참조)</span></label>
+          <input type="email" id="qMyEmail" placeholder="내 메일 주소" autocomplete="off" inputmode="email">
+        </div>
+
+        <details class="q-fold" id="emailjsFold">
+          <summary>EmailJS 연결 <span class="muted">(1클릭 자동발송)</span></summary>
+          <div class="field"><label for="qEjService">Service ID</label><input type="text" id="qEjService" placeholder="service_xxxxxxx" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="qEjTemplate">Template ID</label><input type="text" id="qEjTemplate" placeholder="template_xxxxxxx" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="qEjPublic">Public Key</label><input type="text" id="qEjPublic" placeholder="공개 키" autocomplete="off" spellcheck="false"></div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="qEjClear">설정 지우기</button>
+            <button type="button" class="btn btn-sm" id="qEjSave">설정 저장</button>
+          </div>
+          <p class="hint">이 값들은 이 기기에만 저장됩니다. 템플릿(EmailJS → Email Templates)의 받는 사람(To)은 <code>{{to_email}}</code>, 참조(CC)는 <code>{{cc_email}}</code>로 두고, 본문에 <code>{{message}}</code>를 넣어 주세요. 제목 예: <code>[해밀홈케어] {{subject}}</code></p>
+          <p class="hint">설정 방법: ① emailjs.com 가입 → ② Email Services 에서 쓰는 메일(Gmail 등) 연결 → ③ Email Templates 에서 새 템플릿 만들고 위 변수 넣기 → ④ Account → General 에서 Public Key 복사 → ⑤ 여기에 붙여넣고 저장.</p>
+        </details>
       </div>
     </section>
 
@@ -297,6 +545,10 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       <span>매출 입력</span>
     </button>
+    <button type="button" class="bn-btn" data-tab="quote">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/><path d="M9 11h6M9 15h6"/></svg>
+      <span>견적서</span>
+    </button>
     <button type="button" class="bn-btn" data-tab="expense">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg>
       <span>비용</span>
@@ -307,6 +559,8 @@
     </button>
   </nav>
 </div>
+
+<div id="printRoot" aria-hidden="true"></div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 

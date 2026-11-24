@@ -29,6 +29,42 @@ const CAT_MIGRATION_V2_ADD = ['커피', '담배'];
 
 const DEFAULT_MEMOS = ['서울 마포 · 아파트', '경기 성남 · 오피스텔', '서울 송파 · 상가', '인천 연수 · 빌라'];
 
+/* ------------------------------ 견적서 기본값 ------------------------------ */
+/* 상호·성명·TEL 만 기본값으로 두고, 사업자등록번호·주소·메일·계좌는 이 기기의 localStorage 에만
+   저장합니다(공개 저장소 소스에는 남기지 않음). */
+const DEFAULT_QUOTE_SUPPLIER = {
+  name: '해밀홈케어',
+  person: '문병철',
+  tel: '1600-1970',
+  regno: '',
+  addr: '',
+  email: '',
+  account: ''
+};
+
+const DEFAULT_QUOTE_VALID = '작성일로부터 1주일간';
+
+/* 표준 비고 문구 — 사용자가 고치면 그 문구가 기본값으로 저장됩니다. */
+const DEFAULT_QUOTE_NOTES = [
+  '1. 친환경 에어컨 세척 서비스 개요',
+  '',
+  '   1) 세척방식 : 에어컨 완전 분해세척',
+  '   2) 세척범위 : 부품세척 + 열교환기 (완전 분해 청소)',
+  '   3) 세척장비 : 에어컨세척전용 장비',
+  '   4) 사용약품 : 환경부 인증 친환경 핀세척제',
+  '      - 친환경 인증 시험성적서 제출가능',
+  '      - 한국 냉난방기협회 인증 부식방지 핀세척제 사용',
+  '',
+  '2. 세척 후 사후관리',
+  '',
+  '   1) 세척 후 3개월간 세척작업으로 인한 기기이상 무상 A/S 관리',
+  '   2) 현장작업 전 작동이상 제품 파악 후 내용공유',
+  '',
+  '3. 결제방법 : 계좌이체, 카드결제'
+].join('\n');
+
+const EMAILJS_ENDPOINT = 'https://api.emailjs.com/api/v1.0/email/send';
+
 const PALETTE = ['#0a94b8', '#2fc0ad', '#7cc9e3', '#ef9a54', '#8d7bea', '#e2727f', '#4bb3a5', '#c9a227', '#5b8def', '#b0895f'];
 
 const PERIOD_STEP = { month: 1, quarter: 3, half: 6, year: 12 };
@@ -187,6 +223,14 @@ function freshData() {
     memoPresets: DEFAULT_MEMOS.slice(),
     sales: seed.sales,
     expenses: seed.expenses,
+    quotes: [],
+    quoteSupplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER),
+    quoteSettings: {
+      vat: true,
+      notes: DEFAULT_QUOTE_NOTES,
+      myEmail: '',
+      emailjs: { serviceId: '', templateId: '', publicKey: '' }
+    },
     settings: { samplePrices: true },
     ui: defaultView()
   };
@@ -231,9 +275,61 @@ function normalize(raw) {
       updatedAt: e.updatedAt || Date.now()
     })),
     settings: Object.assign({ samplePrices: false }, raw.settings || {}),
+    quotes: Array.isArray(raw.quotes) ? raw.quotes.filter(q => q && typeof q === 'object').map(normalizeQuote) : [],
+    quoteSupplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER, raw.quoteSupplier && typeof raw.quoteSupplier === 'object' ? {
+      name: String(raw.quoteSupplier.name == null ? DEFAULT_QUOTE_SUPPLIER.name : raw.quoteSupplier.name),
+      person: String(raw.quoteSupplier.person == null ? DEFAULT_QUOTE_SUPPLIER.person : raw.quoteSupplier.person),
+      tel: String(raw.quoteSupplier.tel == null ? DEFAULT_QUOTE_SUPPLIER.tel : raw.quoteSupplier.tel),
+      regno: String(raw.quoteSupplier.regno || ''),
+      addr: String(raw.quoteSupplier.addr || ''),
+      email: String(raw.quoteSupplier.email || ''),
+      account: String(raw.quoteSupplier.account || '')
+    } : {}),
+    quoteSettings: (function (qs) {
+      const src = qs && typeof qs === 'object' ? qs : {};
+      const ej = src.emailjs && typeof src.emailjs === 'object' ? src.emailjs : {};
+      return {
+        vat: src.vat !== false,
+        notes: typeof src.notes === 'string' ? src.notes : DEFAULT_QUOTE_NOTES,
+        myEmail: String(src.myEmail || ''),
+        emailjs: {
+          serviceId: String(ej.serviceId || ''),
+          templateId: String(ej.templateId || ''),
+          publicKey: String(ej.publicKey || '')
+        }
+      };
+    })(raw.quoteSettings),
     ui: Object.assign(defaultView(), raw.ui || {})
   };
   return data;
+}
+
+/** 저장된 견적서 한 건을 안전한 모양으로 정리합니다. */
+function normalizeQuote(q) {
+  const items = Array.isArray(q.items) ? q.items.filter(it => it && typeof it === 'object').map(it => ({
+    name: String(it.name || ''),
+    spec: String(it.spec == null ? '기본' : it.spec),
+    unit: String(it.unit == null ? 'EA' : it.unit),
+    qty: Math.max(0, toNum(it.qty)),
+    price: Math.max(0, toNum(it.price))
+  })) : [];
+  return {
+    id: String(q.id || uid()),
+    no: String(q.no || ''),
+    date: String(q.date || todayStr()).slice(0, 10),
+    receiver: String(q.receiver || ''),
+    receiverEmail: String(q.receiverEmail || ''),
+    ref: String(q.ref || ''),
+    valid: String(q.valid || DEFAULT_QUOTE_VALID),
+    items: items,
+    vat: q.vat !== false,
+    notes: typeof q.notes === 'string' ? q.notes : DEFAULT_QUOTE_NOTES,
+    supplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER, q.supplier && typeof q.supplier === 'object' ? q.supplier : {}),
+    supply: Math.max(0, toNum(q.supply)),
+    tax: Math.max(0, toNum(q.tax)),
+    total: Math.max(0, toNum(q.total)),
+    updatedAt: Number(q.updatedAt) || Date.now()
+  };
 }
 
 /* v2 비용 분류 마이그레이션: 저장된 데이터에 '커피'·'담배' 가 없으면 더한다. */
@@ -364,8 +460,15 @@ function periodTotals(view) {
 
   let revenue = 0, units = 0;
   const typeMap = {};
+  const siteMap = {};
   sales.forEach(s => {
-    revenue += saleAmount(s);
+    const amount = saleAmount(s);
+    revenue += amount;
+    const site = String(s.memo || '').trim() || '미지정(현장 미입력)';
+    if (!siteMap[site]) siteMap[site] = { amount: 0, units: 0, count: 0 };
+    siteMap[site].amount += amount;
+    siteMap[site].units += saleUnits(s);
+    siteMap[site].count += 1;
     for (const id in (s.counts || {})) {
       const q = toNum(s.counts[id]);
       if (!q) continue;
@@ -389,7 +492,7 @@ function periodTotals(view) {
   return {
     meta, sales, expenses, revenue, cost, profit, units,
     margin: revenue > 0 ? (profit / revenue) * 100 : null,
-    typeMap, catMap
+    typeMap, catMap, siteMap
   };
 }
 
@@ -416,6 +519,7 @@ function switchTab(tab) {
   });
   if (tab === 'summary') renderSummary();
   if (tab === 'entry') renderEntry();
+  if (tab === 'quote') renderQuote();
   if (tab === 'expense') renderExpense();
   if (tab === 'manage') renderManage();
   window.scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
@@ -772,6 +876,46 @@ function renderExpenseLedger(t) {
   }).join('');
 }
 
+/* ---- 현장별 매출 (비용 구성과 같은 막대 카드) ---- */
+function renderSiteBreakdown(t) {
+  const el = $('#siteList');
+  if (!el) return;
+  const rows = Object.keys(t.siteMap)
+    .map(name => ({ name: name, amount: t.siteMap[name].amount, units: t.siteMap[name].units, count: t.siteMap[name].count }))
+    .filter(r => r.amount !== 0 || r.count > 0)
+    .sort((a, b) => b.amount - a.amount || b.units - a.units);
+
+  const note = $('#siteNote');
+  if (note) note.textContent = rows.length ? rows.length + '곳 · ' + won(t.revenue) : '';
+
+  if (!rows.length) {
+    el.innerHTML = '<li class="empty">이 기간 매출 기록이 없습니다.</li>';
+    return;
+  }
+
+  const max = Math.max.apply(null, rows.map(r => Math.abs(r.amount))) || 1;
+  const shown = rows.slice(0, 10);
+  const rest = rows.slice(10);
+
+  const rowHtml = (r, label) => {
+    const pct = max ? Math.max(3, (Math.abs(r.amount) / max) * 100) : 0;
+    const share = t.revenue ? Math.round((r.amount / t.revenue) * 100) : 0;
+    return '<li>' +
+      '<div class="bl-row"><span class="name">' + esc(label || r.name) +
+        ' <span class="muted">' + r.units + '대 · ' + share + '%</span></span>' +
+      '<span class="amount">' + won(r.amount) + '</span></div>' +
+      '<div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+      '</li>';
+  };
+
+  let html = shown.map(r => rowHtml(r)).join('');
+  if (rest.length) {
+    const sum = rest.reduce((a, b) => ({ amount: a.amount + b.amount, units: a.units + b.units, count: a.count + b.count }), { amount: 0, units: 0, count: 0 });
+    html += rowHtml(sum, '그 외 ' + rest.length + '곳');
+  }
+  el.innerHTML = html;
+}
+
 function renderSummary() {
   renderBanner();
   renderPeriodUI();
@@ -780,6 +924,7 @@ function renderSummary() {
   renderTrend();
   renderTypeBreakdown(t);
   renderCatBreakdown(t);
+  renderSiteBreakdown(t);
   renderSalesLedger(t);
   renderExpenseLedger(t);
 }
@@ -1219,6 +1364,7 @@ function renderAll() {
   switchTab(state.view.tab || 'summary');
   renderSummary();
   renderEntry();
+  renderQuote();
   renderExpense();
   renderManage();
 }
@@ -1581,6 +1727,7 @@ function init() {
   };
 
   wireEvents();
+  wireQuoteEvents();
 
   $('#salesDate').value = todayStr();
   $('#expenseDate').value = todayStr();
@@ -1588,6 +1735,7 @@ function init() {
   fillSaleForm(null);
   fillExpenseForm(null);
   renderManage();
+  initQuote();
 
   $$('.tab-panel').forEach(p => p.classList.toggle('is-active', p.id === 'tab-' + state.view.tab));
   $$('[data-tab]').forEach(b => b.classList.toggle('is-active', b.dataset.tab === state.view.tab));
@@ -1599,6 +1747,1192 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+/* ==========================================================================
+   견적서 (Quotation)
+   - 작성 폼 ↔ A4 미리보기 ↔ 인쇄/PNG ↔ 메일 발송 ↔ 발행 내역
+   ========================================================================== */
+
+const Q_MIN_ROWS = 10;        // 견적서 표의 최소 줄 수(빈 줄로 채워 견적서다운 모양 유지)
+const HANGUL_DIGIT = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
+const HANGUL_SMALL = ['', '십', '백', '천'];
+const HANGUL_BIG = ['', '만', '억', '조', '경'];
+
+let qDraft = null;
+let qPreviewTimer = null;
+let qLastMailto = '';
+
+/* ------------------------------ 숫자 → 한글 금액 ------------------------------ */
+/** 1672000 → '일백육십칠만이천' (금액 표기용, 일·십·백·천을 모두 읽습니다) */
+function hangulNumber(value) {
+  let n = Math.abs(Math.round(Number(value) || 0));
+  if (n === 0) return '영';
+  const groups = [];
+  while (n > 0) {
+    groups.push(n % 10000);
+    n = Math.floor(n / 10000);
+  }
+  let out = '';
+  for (let gi = groups.length - 1; gi >= 0; gi--) {
+    const g = groups[gi];
+    if (!g) continue;
+    const digits = String(g).padStart(4, '0');
+    let part = '';
+    for (let i = 0; i < 4; i++) {
+      const d = Number(digits[i]);
+      if (!d) continue;
+      part += HANGUL_DIGIT[d] + HANGUL_SMALL[3 - i];
+    }
+    out += part + (HANGUL_BIG[gi] || '');
+  }
+  return out || '영';
+}
+
+function korDate(dateStr) {
+  const d = parseDate(dateStr || todayStr());
+  return d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
+}
+
+/* ------------------------------ 데이터 접근 ------------------------------ */
+function qSupplier() {
+  if (!state.data.quoteSupplier || typeof state.data.quoteSupplier !== 'object') {
+    state.data.quoteSupplier = Object.assign({}, DEFAULT_QUOTE_SUPPLIER);
+  }
+  return state.data.quoteSupplier;
+}
+
+function qSettings() {
+  if (!state.data.quoteSettings || typeof state.data.quoteSettings !== 'object') {
+    state.data.quoteSettings = {
+      vat: true,
+      notes: DEFAULT_QUOTE_NOTES,
+      myEmail: '',
+      emailjs: { serviceId: '', templateId: '', publicKey: '' }
+    };
+  }
+  if (!state.data.quoteSettings.emailjs) {
+    state.data.quoteSettings.emailjs = { serviceId: '', templateId: '', publicKey: '' };
+  }
+  return state.data.quoteSettings;
+}
+
+function quoteList() {
+  if (!Array.isArray(state.data.quotes)) state.data.quotes = [];
+  return state.data.quotes;
+}
+
+function nextQuoteNo(dateStr) {
+  const year = String(dateStr || todayStr()).slice(0, 4);
+  let max = 0;
+  quoteList().forEach(q => {
+    const m = /^(\d{4})-(\d{1,5})$/.exec(String(q.no || ''));
+    if (m && m[1] === year) max = Math.max(max, Number(m[2]));
+  });
+  return year + '-' + String(max + 1).padStart(3, '0');
+}
+
+function blankQuoteItem(name, spec, unit, qty, price) {
+  return {
+    k: uid(),
+    name: name == null ? '' : String(name),
+    spec: spec == null || spec === '' ? '기본' : String(spec),
+    unit: unit == null || unit === '' ? 'EA' : String(unit),
+    qty: qty == null ? 1 : Math.max(0, toNum(qty)),
+    price: price == null ? 0 : Math.max(0, toNum(price))
+  };
+}
+
+function newQuoteDraft() {
+  const s = qSettings();
+  const date = todayStr();
+  return {
+    id: null,
+    date: date,
+    no: nextQuoteNo(date),
+    receiver: '',
+    receiverEmail: '',
+    ref: '',
+    valid: DEFAULT_QUOTE_VALID,
+    items: [blankQuoteItem()],
+    vat: s.vat !== false,
+    notes: s.notes || DEFAULT_QUOTE_NOTES
+  };
+}
+
+function quoteTotals(draft) {
+  const vat = !!draft.vat;
+  const lines = draft.items.map(it => {
+    const qty = Math.max(0, toNum(it.qty));
+    const price = Math.max(0, toNum(it.price));
+    const supply = qty * price;
+    const tax = vat ? Math.round(supply * 0.1) : 0;
+    return { supply: supply, tax: tax };
+  });
+  const supply = lines.reduce((a, b) => a + b.supply, 0);
+  const tax = lines.reduce((a, b) => a + b.tax, 0);
+  return { lines: lines, supply: supply, tax: tax, total: supply + tax };
+}
+
+/* ------------------------------ 폼 ↔ 모델 ------------------------------ */
+const QUOTE_TEXT_FIELDS = [
+  ['#qDate', 'date'],
+  ['#qNo', 'no'],
+  ['#qReceiver', 'receiver'],
+  ['#qReceiverEmail', 'receiverEmail'],
+  ['#qRef', 'ref'],
+  ['#qValid', 'valid'],
+  ['#qNotes', 'notes']
+];
+
+const QUOTE_SUPPLIER_FIELDS = [
+  ['#qSupName', 'name'],
+  ['#qSupPerson', 'person'],
+  ['#qSupRegno', 'regno'],
+  ['#qSupTel', 'tel'],
+  ['#qSupEmail', 'email'],
+  ['#qSupAccount', 'account'],
+  ['#qSupAddr', 'addr']
+];
+
+function fillQuoteForm() {
+  const d = qDraft;
+  QUOTE_TEXT_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    if (el) el.value = d[key] == null ? '' : d[key];
+  });
+  const vat = $('#qVat');
+  if (vat) vat.checked = !!d.vat;
+  const sup = qSupplier();
+  QUOTE_SUPPLIER_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    if (el) el.value = sup[key] == null ? '' : sup[key];
+  });
+  const my = $('#qMyEmail');
+  if (my) my.value = qSettings().myEmail || '';
+  const ej = qSettings().emailjs;
+  if ($('#qEjService')) $('#qEjService').value = ej.serviceId || '';
+  if ($('#qEjTemplate')) $('#qEjTemplate').value = ej.templateId || '';
+  if ($('#qEjPublic')) $('#qEjPublic').value = ej.publicKey || '';
+  $('#quoteMode').textContent = d.id ? '저장됨 · ' + (d.no || '') : '새 견적 작성 중';
+  renderQuoteRows();
+  renderQuoteChips();
+  refreshQuoteTotals();
+}
+
+function renderQuoteChips() {
+  const box = $('#qTypeChips');
+  if (!box) return;
+  const types = state.data.unitTypes.filter(t => t.active !== false);
+  if (!types.length) {
+    box.innerHTML = '<span class="empty-chip">관리 탭에서 기종을 추가하면 여기에 나옵니다.</span>';
+    return;
+  }
+  box.innerHTML = types.map(t =>
+    '<button type="button" class="q-chip" data-qtype="' + t.id + '">' + esc(t.name) +
+      '<em>' + wonPlain(t.price) + '원</em></button>'
+  ).join('');
+}
+
+function quoteRowAmountHtml(item) {
+  const qty = Math.max(0, toNum(item.qty));
+  const price = Math.max(0, toNum(item.price));
+  const supply = qty * price;
+  const tax = qDraft && qDraft.vat ? Math.round(supply * 0.1) : 0;
+  return '<span>공급 ' + wonPlain(supply) + '원</span><b>세액 ' + wonPlain(tax) + '원</b>';
+}
+
+function renderQuoteRows() {
+  const box = $('#quoteRows');
+  if (!box) return;
+  if (!qDraft.items.length) {
+    box.innerHTML = '<p class="empty">품목이 없습니다. 위에서 기종을 고르거나 ‘+ 품목 줄 추가’를 눌러 주세요.</p>';
+    return;
+  }
+  box.innerHTML = qDraft.items.map((it, i) =>
+    '<div class="q-row" data-k="' + it.k + '">' +
+      '<input type="text" class="qr-name" value="' + esc(it.name) + '" placeholder="품목 (예: 시스템에어컨_4웨이)" aria-label="' + (i + 1) + '번째 품목" autocomplete="off">' +
+      '<input type="text" class="qr-spec" value="' + esc(it.spec) + '" placeholder="기본" aria-label="' + (i + 1) + '번째 규격/사양" autocomplete="off">' +
+      '<input type="text" class="qr-unit" value="' + esc(it.unit) + '" placeholder="EA" aria-label="' + (i + 1) + '번째 단위" autocomplete="off">' +
+      '<input type="text" class="qr-qty" inputmode="numeric" value="' + toNum(it.qty) + '" aria-label="' + (i + 1) + '번째 수량">' +
+      '<input type="text" class="qr-price money-input" inputmode="numeric" value="' + (toNum(it.price) ? wonPlain(it.price) : '') + '" placeholder="단가" aria-label="' + (i + 1) + '번째 단가">' +
+      '<div class="qr-amount">' + quoteRowAmountHtml(it) + '</div>' +
+      '<button type="button" class="qr-del" data-qdel="' + it.k + '" aria-label="' + (i + 1) + '번째 품목 삭제">✕</button>' +
+    '</div>'
+  ).join('');
+}
+
+function updateQuoteRowAmounts() {
+  $$('#quoteRows .q-row').forEach(row => {
+    const it = qDraft.items.find(x => x.k === row.dataset.k);
+    const box = $('.qr-amount', row);
+    if (it && box) box.innerHTML = quoteRowAmountHtml(it);
+  });
+}
+
+function refreshQuoteTotals() {
+  if (!qDraft) return;
+  const t = quoteTotals(qDraft);
+  if ($('#qSupply')) $('#qSupply').textContent = won(t.supply);
+  if ($('#qTax')) $('#qTax').textContent = won(t.tax);
+  if ($('#qTotal')) $('#qTotal').textContent = won(t.total);
+  if ($('#qHangul')) $('#qHangul').textContent = '일금 ' + hangulNumber(t.total) + ' 원정';
+  updateQuoteRowAmounts();
+}
+
+/* ------------------------------ 미리보기(A4) ------------------------------ */
+function queueQuotePreview() {
+  clearTimeout(qPreviewTimer);
+  qPreviewTimer = setTimeout(renderQuotePreview, 110);
+}
+
+function setText(sel, value) {
+  const el = $(sel);
+  if (el) el.textContent = value == null ? '' : String(value);
+}
+
+function renderQuotePreview() {
+  if (!qDraft || !$('#quoteSheet')) return;
+  const d = qDraft;
+  const sup = qSupplier();
+  const t = quoteTotals(d);
+
+  setText('#qsDate', korDate(d.date));
+  setText('#qsNo', d.no || '');
+  setText('#qsReceiver', d.receiver || '');
+  setText('#qsRef', d.ref || '');
+  setText('#qsValid', d.valid || DEFAULT_QUOTE_VALID);
+  setText('#qsSupName', sup.name || '');
+  setText('#qsSupRegno', sup.regno || '');
+  setText('#qsSupPerson', sup.person || '');
+  setText('#qsSupAddr', sup.addr || '');
+  setText('#qsSupTel', sup.tel || '');
+  setText('#qsSupEmail', sup.email || '');
+  setText('#qsTotalEm', d.vat ? '(세액포함)' : '(부가세 별도)');
+  setText('#qsHangul', hangulNumber(t.total) + ' 원정');
+  setText('#qsWon', '(₩ ' + nf.format(t.total) + ')');
+  setText('#qsNotes', d.notes || '');
+  setText('#qsAccount', sup.account || '');
+
+  const shown = d.items.filter(it => String(it.name || '').trim() || toNum(it.price) > 0);
+  let rows = '';
+  shown.forEach(it => {
+    const qty = Math.max(0, toNum(it.qty));
+    const price = Math.max(0, toNum(it.price));
+    const supply = qty * price;
+    const tax = d.vat ? Math.round(supply * 0.1) : 0;
+    rows += '<tr>' +
+      '<td class="qs-name-cell">' + esc(it.name) + '</td>' +
+      '<td>' + esc(it.spec) + '</td>' +
+      '<td>' + esc(it.unit) + '</td>' +
+      '<td class="qs-num">' + (qty || '') + '</td>' +
+      '<td class="qs-num">' + (price ? wonPlain(price) : '') + '</td>' +
+      '<td class="qs-num">' + (supply ? wonPlain(supply) : '') + '</td>' +
+      '<td class="qs-num">' + (tax ? wonPlain(tax) : '') + '</td>' +
+      '</tr>';
+  });
+  const fill = Math.max(0, Q_MIN_ROWS - shown.length);
+  for (let i = 0; i < fill; i++) {
+    rows += '<tr class="qs-filler"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
+  }
+  const body = $('#qsItems');
+  if (body) body.innerHTML = rows;
+  setText('#qsSupplySum', wonPlain(t.supply));
+  setText('#qsGrandSum', wonPlain(t.total));
+
+  fitQuotePreview();
+}
+
+function fitQuotePreview() {
+  const wrap = $('#quotePreviewWrap');
+  const sheet = $('#quoteSheet');
+  if (!wrap || !sheet) return;
+  sheet.style.transform = 'none';
+  sheet.style.marginLeft = '0px';
+  const natural = sheet.offsetWidth || 794;
+  const avail = Math.max(120, wrap.clientWidth);
+  const s = Math.min(1, avail / natural);
+  sheet.style.transform = 'scale(' + s.toFixed(4) + ')';
+  sheet.style.marginLeft = Math.max(0, Math.round((avail - natural * s) / 2)) + 'px';
+  wrap.style.height = Math.round(sheet.offsetHeight * s + 20) + 'px';
+}
+
+/* ------------------------------ 발행 내역 ------------------------------ */
+function renderQuoteHistory() {
+  const el = $('#quoteHistoryList');
+  if (!el) return;
+  const list = quoteList().slice().sort((a, b) =>
+    a.date === b.date ? (b.updatedAt || 0) - (a.updatedAt || 0) : (a.date < b.date ? 1 : -1)
+  );
+  const note = $('#quoteHistoryNote');
+  if (note) note.textContent = list.length ? list.length + '건 · 최근 30건 표시' : '';
+  if (!list.length) {
+    el.innerHTML = '<li class="empty">아직 저장한 견적서가 없습니다. 위에서 작성하고 ‘견적서 저장’을 눌러 주세요.</li>';
+    return;
+  }
+  el.innerHTML = list.slice(0, 30).map(q => {
+    const d = parseDate(q.date);
+    const items = Array.isArray(q.items) ? q.items.length : 0;
+    return '<li data-id="' + esc(q.id) + '">' +
+      '<div class="qh-top"><span class="qh-no">' + esc(q.no || '(번호 없음)') + '</span>' +
+        '<span class="qh-date">' + (d.getMonth() + 1) + '.' + d.getDate() + '</span></div>' +
+      '<span class="qh-amount">' + won(q.total) + '</span>' +
+      '<span class="qh-sub">' + esc(q.receiver || '수신 미입력') + ' · 품목 ' + items + '개' +
+        (q.receiverEmail ? ' · ' + esc(q.receiverEmail) : '') + '</span>' +
+      '<span class="qh-actions">' +
+        '<button type="button" data-qact="load" data-id="' + esc(q.id) + '">불러오기</button>' +
+        '<button type="button" data-qact="copy" data-id="' + esc(q.id) + '">복제</button>' +
+        '<button type="button" class="sales" data-qact="sales" data-id="' + esc(q.id) + '">이 내역으로 매출 등록</button>' +
+        '<button type="button" class="del" data-qact="del" data-id="' + esc(q.id) + '">삭제</button>' +
+      '</span>' +
+      '</li>';
+  }).join('');
+}
+
+function loadQuoteIntoForm(quote, asCopy) {
+  if (!quote) return;
+  const date = asCopy ? todayStr() : (quote.date || todayStr());
+  qDraft = {
+    id: asCopy ? null : quote.id,
+    date: date,
+    no: asCopy ? nextQuoteNo(date) : (quote.no || ''),
+    receiver: quote.receiver || '',
+    receiverEmail: quote.receiverEmail || '',
+    ref: quote.ref || '',
+    valid: quote.valid || DEFAULT_QUOTE_VALID,
+    items: (quote.items || []).map(it => blankQuoteItem(it.name, it.spec, it.unit, it.qty, it.price)),
+    vat: quote.vat !== false,
+    notes: typeof quote.notes === 'string' ? quote.notes : DEFAULT_QUOTE_NOTES
+  };
+  if (!qDraft.items.length) qDraft.items = [blankQuoteItem()];
+  fillQuoteForm();
+  renderQuotePreview();
+  $('#quoteMode').textContent = asCopy ? '복제본 작성 중 · ' + qDraft.no : '불러옴 · ' + (quote.no || '');
+  if (window.scrollTo) window.scrollTo({ top: 0 });
+  toast(asCopy ? '견적서를 복제했습니다 · 새 번호 ' + qDraft.no : '견적서를 불러왔습니다 · ' + (quote.no || ''));
+}
+
+function saveQuote() {
+  if (!qDraft) return;
+  const named = qDraft.items.filter(it => String(it.name || '').trim());
+  if (!named.length) {
+    toast('품목을 하나 이상 입력해 주세요.');
+    const first = $('.qr-name', $('#quoteRows'));
+    if (first) first.focus();
+    return;
+  }
+  const t = quoteTotals(qDraft);
+  const quote = {
+    id: qDraft.id || uid(),
+    no: String(qDraft.no || '').trim() || nextQuoteNo(qDraft.date),
+    date: qDraft.date || todayStr(),
+    receiver: qDraft.receiver || '',
+    receiverEmail: qDraft.receiverEmail || '',
+    ref: qDraft.ref || '',
+    valid: qDraft.valid || DEFAULT_QUOTE_VALID,
+    items: qDraft.items
+      .filter(it => String(it.name || '').trim() || toNum(it.price) > 0)
+      .map(it => ({
+        name: String(it.name || '').trim(),
+        spec: String(it.spec || '기본'),
+        unit: String(it.unit || 'EA'),
+        qty: Math.max(0, toNum(it.qty)),
+        price: Math.max(0, toNum(it.price))
+      })),
+    vat: !!qDraft.vat,
+    notes: qDraft.notes || '',
+    supplier: Object.assign({}, qSupplier()),
+    supply: t.supply,
+    tax: t.tax,
+    total: t.total,
+    updatedAt: Date.now()
+  };
+  const list = quoteList();
+  const i = list.findIndex(q => q.id === quote.id);
+  if (i >= 0) list[i] = quote;
+  else list.unshift(quote);
+  qDraft.id = quote.id;
+  qDraft.no = quote.no;
+  $('#qNo').value = quote.no;
+  $('#quoteMode').textContent = '저장됨 · ' + quote.no;
+  save();
+  renderQuoteHistory();
+  renderQuotePreview();
+  toast('견적서를 저장했습니다 · ' + quote.no);
+}
+
+function deleteQuote(id) {
+  const q = quoteList().find(x => x.id === id);
+  if (!q) return;
+  if (!confirm('견적서 ' + (q.no || '') + ' (' + won(q.total) + ')를 삭제할까요?')) return;
+  state.data.quotes = quoteList().filter(x => x.id !== id);
+  if (qDraft && qDraft.id === id) qDraft.id = null;
+  save();
+  renderQuoteHistory();
+  toast('견적서를 삭제했습니다.');
+}
+
+/** 견적 내역을 ‘매출 입력’ 탭으로 옮깁니다. 이름이 같은 기종은 대수로, 나머지는 기타 매출로. */
+function quoteToSales(quote) {
+  if (!quote) return;
+  const target = Math.max(0, toNum(quote.total));
+  const counts = {};
+  let extra = 0;
+  let mapped = 0;
+  (quote.items || []).forEach(it => {
+    const qty = Math.max(0, toNum(it.qty));
+    const price = Math.max(0, toNum(it.price));
+    const lineTotal = Math.round(qty * price * (quote.vat ? 1.1 : 1));
+    const name = String(it.name || '').trim().toLowerCase();
+    const type = state.data.unitTypes.find(x => String(x.name).trim().toLowerCase() === name);
+    if (type && qty) {
+      counts[type.id] = (counts[type.id] || 0) + qty;
+      mapped += qty * type.price;
+    } else {
+      extra += lineTotal;
+    }
+  });
+  const adjust = target - mapped - extra;
+
+  state.editSale = null;
+  switchTab('entry');
+  fillSaleForm(null);
+  $('#salesDate').value = quote.date || todayStr();
+  renderCountList(counts);
+  $('#extraSales').value = extra ? wonPlain(extra) : '';
+  $('#adjustSales').value = adjust ? wonPlain(adjust) : '';
+  $('#salesMemo').value = '견적 ' + (quote.no || '') + (quote.receiver ? ' · ' + quote.receiver : '');
+  updateEntryTotal();
+  toast('매출 입력으로 옮겼습니다 · 저장을 눌러 주세요 (' + won(target) + ')');
+}
+
+/* ------------------------------ 인쇄 / PDF ------------------------------ */
+function buildPrintSheet() {
+  const root = $('#printRoot');
+  const sheet = $('#quoteSheet');
+  if (!root || !sheet) return null;
+  root.innerHTML = '';
+  const clone = document.createElement('div');
+  clone.className = 'qsheet';
+  clone.innerHTML = sheet.innerHTML;
+  root.appendChild(clone);
+  // 품목이 많아 A4 보다 길어지면 한 장에 들어가도록 자동 축소(Chromium zoom)
+  const mmPx = 96 / 25.4;
+  const pageH = 297 * mmPx;
+  const h = clone.scrollHeight;
+  if (h > pageH + 2) {
+    clone.style.zoom = String(Math.max(0.55, pageH / h));
+  }
+  return clone;
+}
+
+function printQuote() {
+  renderQuotePreview();
+  buildPrintSheet();
+  window.print();
+}
+
+/* ------------------------------ 이미지(PNG) ------------------------------ */
+function buildQuoteCanvas() {
+  const d = qDraft;
+  const sup = qSupplier();
+  const t = quoteTotals(d);
+  const K = 6;                                     // 1mm = 6px (≈152dpi)
+  const FONT = '"Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+
+  const L = 14.4, R = 194.7, CX1 = 53.4, CX2 = 155.7;
+  const TOP = 17.4, HEAD_B = TOP + 10.2;
+  const RECV_R = 106.5, SUP_L = 107.9;
+  const R1B = 45.9, R2B = 54.3, R3B = 61.8;
+  const S_TITLE_B = 37.2, S_NAME_B = 42.7, S_REG_B = 49.0, S_ADDR_B = 65.5, S_TEL_B = 74.9;
+  const BAND_T = 74.9, BAND_B = 84.6;
+  const TH_T = 84.6, TH_B = 92.6;
+  const ROW_H = 8;
+  const shown = d.items.filter(it => String(it.name || '').trim() || toNum(it.price) > 0);
+  const rows = Math.max(Q_MIN_ROWS, shown.length);
+  const BODY_B = TH_B + rows * ROW_H;
+  const FOOT_B = BODY_B + 7.8;
+  const NOTE_T = FOOT_B, NOTE_H = 70;
+  const NOTE_B = NOTE_T + NOTE_H;
+  const ACC_B = NOTE_B + 8.3;
+  const Hmm = Math.max(297, ACC_B + 10);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(210 * K);
+  canvas.height = Math.round(Hmm * K);
+  const ctx = canvas.getContext('2d');
+
+  const px = v => v * K;
+  const font = (size, weight) => (weight || 400) + ' ' + px(size) + 'px ' + FONT;
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#111';
+  ctx.strokeStyle = '#111';
+  ctx.lineCap = 'butt';
+
+  function line(x1, y1, x2, y2, w) {
+    ctx.lineWidth = px(w || 0.25);
+    ctx.beginPath();
+    ctx.moveTo(px(x1), px(y1));
+    ctx.lineTo(px(x2), px(y2));
+    ctx.stroke();
+  }
+  function rect(x1, y1, x2, y2, w) {
+    ctx.lineWidth = px(w || 0.25);
+    ctx.strokeRect(px(x1), px(y1), px(x2 - x1), px(y2 - y1));
+  }
+  function text(str, x, y, o) {
+    o = o || {};
+    ctx.font = font(o.size || 2.7, o.weight);
+    ctx.fillStyle = o.color || '#111';
+    ctx.textAlign = o.align || 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(str == null ? '' : str), px(x), px(y));
+  }
+  function tracked(str, cx, y, size, weight, tracking) {
+    ctx.font = font(size, weight);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const chars = String(str).split('');
+    const widths = chars.map(c => ctx.measureText(c).width);
+    const total = widths.reduce((a, b) => a + b, 0) + px(tracking) * (chars.length - 1);
+    let x = px(cx) - total / 2;
+    ctx.fillStyle = '#111';
+    chars.forEach((c, i) => {
+      ctx.fillText(c, x, px(y));
+      x += widths[i] + px(tracking);
+    });
+  }
+  /** 폭에 맞춰 줄바꿈 — 가급적 공백에서 끊고, 한 단어가 길면 글자 단위로 */
+  function wrap(str, maxW, size, weight) {
+    ctx.font = font(size, weight);
+    const max = px(maxW);
+    const out = [];
+    String(str).split('\n').forEach(par => {
+      if (!par) { out.push(''); return; }
+      let line = '';
+      for (let i = 0; i < par.length; i++) {
+        const ch = par[i];
+        if (ctx.measureText(line + ch).width > max && line) {
+          const sp = line.lastIndexOf(' ');
+          if (sp > 0 && i - sp < 14) {
+            out.push(line.slice(0, sp));
+            line = line.slice(sp + 1) + ch;
+          } else {
+            out.push(line);
+            line = ch;
+          }
+        } else {
+          line += ch;
+        }
+      }
+      out.push(line);
+    });
+    return out;
+  }
+
+  /* --- 머리글 --- */
+  line(L, TOP, R, TOP, 0.45);
+  line(L, HEAD_B, R, HEAD_B, 0.45);
+  line(CX1, TOP, CX1, HEAD_B, 0.25);
+  line(CX2, TOP, CX2, HEAD_B, 0.25);
+  text('DATE', L + 2, TOP + 3.1, { size: 2.2 });
+  text(korDate(d.date), L + 2, TOP + 7.4, { size: 2.9, weight: 700 });
+  tracked('견 적 서', (CX1 + CX2) / 2, TOP + 5.3, 7, 800, 3.1);
+  text('No.', R - 2, TOP + 3.1, { size: 2.2, align: 'right' });
+  text(d.no || '', R - 2, TOP + 7.4, { size: 2.9, weight: 700, align: 'right' });
+
+  /* --- 수신 블록 --- */
+  rect(L, HEAD_B, RECV_R, R3B, 0.25);
+  line(L, R1B, RECV_R, R1B, 0.25);
+  line(L, R2B, RECV_R, R2B, 0.25);
+  text('수신', L + 2, (HEAD_B + R1B) / 2, { size: 2.8 });
+  text('참조', L + 2, (R1B + R2B) / 2, { size: 2.8 });
+  text('유효기간', L + 2, (R2B + R3B) / 2, { size: 2.8 });
+  text('귀중', RECV_R - 2, (HEAD_B + R1B) / 2, { size: 2.8, align: 'right' });
+
+  const recvLines = wrap(d.receiver || '', RECV_R - L - 36, 3, 700).slice(0, 2);
+  const recvBase = (HEAD_B + R1B) / 2 - (recvLines.length - 1) * 2.2;
+  recvLines.forEach((ln, i) => text(ln, RECV_R - 10, recvBase + i * 4.4, { size: 3, weight: 700, align: 'right' }));
+  const refLines = wrap(d.ref || '', RECV_R - L - 30, 2.7, 400).slice(0, 1);
+  refLines.forEach(ln => text(ln, (L + 26 + RECV_R) / 2, (R1B + R2B) / 2, { size: 2.7, align: 'center' }));
+  const validLines = wrap(d.valid || DEFAULT_QUOTE_VALID, RECV_R - L - 30, 2.7, 400).slice(0, 1);
+  validLines.forEach(ln => text(ln, (L + 26 + RECV_R) / 2, (R2B + R3B) / 2, { size: 2.7, align: 'center' }));
+
+  text('아래와 같이 견적합니다.', L + 1.4, R3B + 8, { size: 3.2 });
+
+  /* --- 공급자 --- */
+  rect(SUP_L, HEAD_B, R, S_TEL_B, 0.25);
+  line(SUP_L, S_TITLE_B, R, S_TITLE_B, 0.25);
+  line(SUP_L, S_NAME_B, R, S_NAME_B, 0.25);
+  line(SUP_L, S_REG_B, R, S_REG_B, 0.25);
+  line(SUP_L, S_ADDR_B, R, S_ADDR_B, 0.25);
+  tracked('공 급 자', (SUP_L + R) / 2, (HEAD_B + S_TITLE_B) / 2, 3.1, 700, 0.9);
+
+  const C1 = SUP_L + 16.5;
+  const C2 = C1 + 20.4;
+  const C3 = C2 + 12.9;
+  const C4 = R - 12.3;
+  line(C1, S_TITLE_B, C1, S_TEL_B, 0.25);
+  line(C2, S_NAME_B, C2, S_REG_B, 0.25);
+  line(C3, S_NAME_B, C3, S_REG_B, 0.25);
+  line(C4, S_NAME_B, C4, S_REG_B, 0.25);
+  line(C2, S_ADDR_B, C2, S_TEL_B, 0.25);
+  line(C3, S_ADDR_B, C3, S_TEL_B, 0.25);
+
+  text('상호', SUP_L + 2, (S_TITLE_B + S_NAME_B) / 2, { size: 2.6 });
+  text(sup.name || '', (C1 + R) / 2, (S_TITLE_B + S_NAME_B) / 2, { size: 2.9, weight: 700, align: 'center' });
+
+  text('등록번호', SUP_L + 2, (S_NAME_B + S_REG_B) / 2, { size: 2.5 });
+  text(sup.regno || '', (C1 + C2) / 2, (S_NAME_B + S_REG_B) / 2, { size: 2.6, align: 'center' });
+  text('성명', C2 + 1.6, (S_NAME_B + S_REG_B) / 2, { size: 2.5 });
+  text(sup.person || '', (C3 + C4) / 2, (S_NAME_B + S_REG_B) / 2, { size: 2.6, align: 'center' });
+  text('(인)', (C4 + R) / 2, (S_NAME_B + S_REG_B) / 2, { size: 2.5, align: 'center' });
+
+  text('주소', SUP_L + 2, S_REG_B + 3, { size: 2.6 });
+  const addrLines = wrap(sup.addr || '', R - C1 - 5, 2.6, 400).slice(0, 2);
+  addrLines.forEach((ln, i) => text(ln, C1 + 2, S_REG_B + 4 + i * 4.3, { size: 2.6 }));
+
+  text('TEL', SUP_L + 2, (S_ADDR_B + S_TEL_B) / 2, { size: 2.5 });
+  text(sup.tel || '', C1 + 2, (S_ADDR_B + S_TEL_B) / 2, { size: 2.6 });
+  text('E-mail', C2 + 1.6, (S_ADDR_B + S_TEL_B) / 2, { size: 2.5 });
+  const emailTxt = sup.email || '';
+  ctx.font = font(2.6, 400);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  let emailSize = 2.6;
+  while (ctx.measureText(emailTxt).width > px(R - C3 - 4) && emailSize > 1.8) {
+    emailSize -= 0.1;
+    ctx.font = font(emailSize, 400);
+  }
+  text(emailTxt, C3 + 2, (S_ADDR_B + S_TEL_B) / 2, { size: emailSize });
+
+  /* --- 합계금액 --- */
+  line(L, BAND_T, R, BAND_T, 0.45);
+  line(L, BAND_B, R, BAND_B, 0.45);
+  const bandMid = (BAND_T + BAND_B) / 2;
+  text('합계금액', L + 1.4, bandMid, { size: 2.9, weight: 700 });
+  ctx.font = font(2.9, 700);
+  const labelW = 14.6;
+  text(d.vat ? '(세액포함)' : '(부가세 별도)', L + 1.4 + labelW, bandMid, { size: 2.4 });
+  text('일금', 72.8, bandMid, { size: 2.8, align: 'center' });
+  text(hangulNumber(t.total) + ' 원정', 127, bandMid, { size: 3.4, weight: 700, align: 'center' });
+  text('(₩ ' + nf.format(t.total) + ')', R - 1.4, bandMid, { size: 3, weight: 700, align: 'right' });
+
+  /* --- 품목 표 --- */
+  const COLS = [L, 67.4, 90.3, 103.5, 116.4, 143.3, 169.8, R];
+  line(L, TH_T, R, TH_T, 0.45);
+  line(L, TH_B, R, TH_B, 0.25);
+  line(L, TH_T, L, FOOT_B, 0.25);
+  line(R, TH_T, R, FOOT_B, 0.25);
+  const HEADERS = ['품목', '규격/사양', '단위', '수량', '단가', '공급가액', '세액'];
+  for (let c = 1; c < COLS.length - 1; c++) line(COLS[c], TH_T, COLS[c], FOOT_B, 0.25);
+  HEADERS.forEach((h, i) => text(h, (COLS[i] + COLS[i + 1]) / 2, (TH_T + TH_B) / 2, { size: 2.7, weight: 700, align: 'center' }));
+
+  for (let i = 0; i < rows; i++) {
+    const top = TH_B + i * ROW_H;
+    const mid = top + ROW_H / 2;
+    line(L, top + ROW_H, R, top + ROW_H, 0.25);
+    const it = shown[i];
+    if (!it) continue;
+    const qty = Math.max(0, toNum(it.qty));
+    const price = Math.max(0, toNum(it.price));
+    const supply = qty * price;
+    const tax = d.vat ? Math.round(supply * 0.1) : 0;
+    text(String(it.name || ''), (COLS[0] + COLS[1]) / 2, mid, { size: 2.7, align: 'center' });
+    text(String(it.spec || ''), (COLS[1] + COLS[2]) / 2, mid, { size: 2.7, align: 'center' });
+    text(String(it.unit || ''), (COLS[2] + COLS[3]) / 2, mid, { size: 2.7, align: 'center' });
+    text(qty ? String(qty) : '', (COLS[3] + COLS[4]) / 2, mid, { size: 2.7, align: 'center' });
+    text(price ? wonPlain(price) : '', COLS[5] - 1.6, mid, { size: 2.7, align: 'right' });
+    text(supply ? wonPlain(supply) : '', COLS[6] - 1.6, mid, { size: 2.7, align: 'right' });
+    text(tax ? wonPlain(tax) : '', COLS[7] - 1.6, mid, { size: 2.7, align: 'right' });
+  }
+
+  line(L, BODY_B, R, BODY_B, 0.45);
+  text('합계', (COLS[0] + COLS[1]) / 2, BODY_B + 3.9, { size: 2.7, weight: 700, align: 'center' });
+  text(wonPlain(t.supply), COLS[6] - 1.6, BODY_B + 3.9, { size: 2.7, weight: 700, align: 'right' });
+  text(wonPlain(t.total), COLS[7] - 1.6, BODY_B + 3.9, { size: 2.7, weight: 700, align: 'right' });
+
+  /* --- 비고 / 계좌정보 --- */
+  rect(L, NOTE_T, R, NOTE_B, 0.25);
+  line(L + 34.4, NOTE_T, L + 34.4, NOTE_B, 0.25);
+  text('비고', L + 17.2, NOTE_T + NOTE_H / 2, { size: 2.8, align: 'center' });
+  const noteLines = wrap(d.notes || '', R - (L + 36.4) - 2, 2.6, 400);
+  const lh = 4.1;
+  noteLines.slice(0, Math.floor((NOTE_H - 6) / lh)).forEach((ln, i) => {
+    text(ln, L + 36.4, NOTE_T + 5 + i * lh, { size: 2.6 });
+  });
+
+  rect(L, NOTE_B, R, ACC_B, 0.25);
+  line(L + 34.4, NOTE_B, L + 34.4, ACC_B, 0.25);
+  text('계좌정보', L + 17.2, (NOTE_B + ACC_B) / 2, { size: 2.8, align: 'center' });
+  text(sup.account || '', L + 36.4, (NOTE_B + ACC_B) / 2, { size: 2.6 });
+
+  return canvas;
+}
+
+function downloadQuotePng() {
+  return new Promise(resolve => {
+    try {
+      const canvas = buildQuoteCanvas();
+      canvas.toBlob(blob => {
+        if (!blob) { resolve(null); return; }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = parseDate(qDraft.date || todayStr());
+        a.href = url;
+        a.download = '해밀홈케어_견적서_' + (qDraft.no || (d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()))) + '.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        resolve(blob.size);
+      }, 'image/png');
+    } catch (err) {
+      console.error(err);
+      resolve(null);
+    }
+  });
+}
+
+/* ------------------------------ 이메일 ------------------------------ */
+function isEmail(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(s || '').trim());
+}
+
+function emailjsCfg() {
+  return qSettings().emailjs || {};
+}
+
+function isEmailjsReady() {
+  const c = emailjsCfg();
+  return !!(c.serviceId && c.templateId && c.publicKey);
+}
+
+function quoteEmailParts(quote) {
+  const d = quote || qDraft;
+  const sup = qSupplier();
+  const t = quoteTotals(d);
+  const subject = '[해밀홈케어] 에어컨 청소 견적서 (' + (d.no || '번호 미지정') + ')';
+  const lines = [];
+  lines.push('안녕하세요, 해밀홈케어입니다.');
+  lines.push('아래와 같이 에어컨 청소 견적을 보내드립니다.');
+  lines.push('');
+  lines.push('■ 견적번호 : ' + (d.no || '-'));
+  lines.push('■ 작성일 : ' + korDate(d.date));
+  if (d.receiver) lines.push('■ 수신 : ' + d.receiver);
+  if (d.ref) lines.push('■ 참조 : ' + d.ref);
+  lines.push('■ 유효기간 : ' + (d.valid || DEFAULT_QUOTE_VALID));
+  lines.push('');
+  lines.push('[ 품목 ]');
+  (d.items || []).forEach((it, i) => {
+    const qty = Math.max(0, toNum(it.qty));
+    const price = Math.max(0, toNum(it.price));
+    if (!String(it.name || '').trim() && !price) return;
+    lines.push(' ' + (i + 1) + ') ' + (it.name || '품목') + ' · ' + (it.spec || '기본') + ' · ' +
+      qty + (it.unit || 'EA') + ' × ' + won(price) + ' = ' + won(qty * price));
+  });
+  lines.push('');
+  lines.push('공급가액 : ' + won(t.supply));
+  if (d.vat) lines.push('세액(10%) : ' + won(t.tax));
+  lines.push('합계금액 : ' + won(t.total) + ' (일금 ' + hangulNumber(t.total) + ' 원정)');
+  if (d.notes) {
+    lines.push('');
+    lines.push('[ 비고 ]');
+    lines.push(d.notes);
+  }
+  if (sup.account) {
+    lines.push('');
+    lines.push('[ 계좌정보 ]');
+    lines.push(sup.account);
+  }
+  lines.push('');
+  lines.push([sup.name, sup.person, sup.tel ? 'TEL ' + sup.tel : '', sup.email].filter(Boolean).join(' | '));
+  return { subject: subject, body: lines.join('\r\n'), totals: t };
+}
+
+function buildQuoteMailto(quote, myEmail) {
+  const d = quote || qDraft;
+  const sup = qSupplier();
+  const parts = quoteEmailParts(quote);
+  const to = String(d.receiverEmail || '').trim();
+  const cc = String(myEmail == null ? qSettings().myEmail : myEmail).trim();
+  const qs = ['subject=' + encodeURIComponent(parts.subject)];
+  if (cc) qs.push('cc=' + encodeURIComponent(cc));
+  qs.push('body=' + encodeURIComponent(parts.body));
+  return 'mailto:' + to + '?' + qs.join('&');
+}
+
+function openExternal(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function sendViaEmailjs(params) {
+  const c = emailjsCfg();
+  const res = await fetch(EMAILJS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      service_id: c.serviceId,
+      template_id: c.templateId,
+      user_id: c.publicKey,
+      template_params: params
+    })
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = await res.text(); } catch (err) { detail = ''; }
+    throw new Error('EmailJS ' + res.status + (detail ? ' · ' + detail.slice(0, 160) : ''));
+  }
+  return true;
+}
+
+async function sendQuoteEmail() {
+  if (!qDraft) return;
+  renderQuotePreview();
+  const btn = $('#quoteEmail');
+  const d = qDraft;
+  const sup = qSupplier();
+  const to = String(d.receiverEmail || '').trim();
+  const my = String(qSettings().myEmail || '').trim();
+
+  if (!to && !my) {
+    toast('받는 사람(수신 이메일)이나 내 메일을 먼저 입력해 주세요.');
+    const el = $('#qReceiverEmail');
+    if (el) el.focus();
+    return;
+  }
+  if (to && !isEmail(to)) { toast('수신 이메일 주소 형식을 확인해 주세요.'); $('#qReceiverEmail').focus(); return; }
+  if (my && !isEmail(my)) { toast('내 메일 주소 형식을 확인해 주세요.'); $('#qMyEmail').focus(); return; }
+
+  const parts = quoteEmailParts();
+
+  if (!isEmailjsReady()) {
+    const url = buildQuoteMailto(d, my);
+    qLastMailto = url;
+    openExternal(url);
+    toast('메일 앱을 열었습니다 · 받는 사람' + (my ? '·내 메일' : '') + '이 채워졌어요');
+    return;
+  }
+
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '발송 중…'; }
+  try {
+    const base = {
+      from_name: sup.name || '해밀홈케어',
+      reply_to: sup.email || my || to,
+      subject: parts.subject,
+      message: parts.body,
+      quote_no: d.no || '',
+      quote_date: korDate(d.date),
+      receiver: d.receiver || '',
+      total: String(parts.totals.total),
+      total_krw: won(parts.totals.total),
+      items_summary: (d.items || []).filter(it => String(it.name || '').trim()).map(it =>
+        it.name + ' ' + toNum(it.qty) + (it.unit || 'EA') + '×' + wonPlain(it.price)
+      ).join(' / '),
+      account: sup.account || '',
+      my_email: my
+    };
+    const jobs = [sendViaEmailjs(Object.assign({}, base, { to_email: to || my, cc_email: my && my !== to ? my : '' }))];
+    if (my && my !== to) {
+      jobs.push(sendViaEmailjs(Object.assign({}, base, { to_email: my, cc_email: to })));
+    }
+    await Promise.all(jobs);
+    toast('이메일을 발송했습니다 · ' + [to, my].filter(Boolean).join(', '));
+  } catch (err) {
+    console.error(err);
+    qLastMailto = buildQuoteMailto(d, my);
+    toast('자동발송이 실패했습니다. 메일 앱으로 열어 보내 주세요.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label || '이메일 발송'; }
+  }
+}
+
+/* ------------------------------ 초기화 · 이벤트 ------------------------------ */
+function initQuote() {
+  qDraft = newQuoteDraft();
+  fillQuoteForm();
+  renderQuotePreview();
+  renderQuoteHistory();
+  renderEmailCfgState();
+}
+
+function renderQuote() {
+  if (!qDraft) qDraft = newQuoteDraft();
+  fillQuoteForm();
+  renderQuotePreview();
+  renderQuoteHistory();
+  renderEmailCfgState();
+  const presets = $('#receiverPresets');
+  if (presets) {
+    const names = Array.from(new Set(quoteList().map(q => q.receiver).filter(Boolean))).slice(0, 20);
+    presets.innerHTML = names.map(n => '<option value="' + esc(n) + '"></option>').join('');
+  }
+}
+
+function renderEmailCfgState() {
+  const ready = isEmailjsReady();
+  const stateEl = $('#emailCfgState');
+  if (stateEl) stateEl.textContent = ready ? '1클릭 자동발송 사용 중' : '미설정 · 메일 앱으로 열기';
+  const hint = $('#emailModeHint');
+  if (hint) {
+    hint.textContent = ready
+      ? '이메일 발송을 누르면 수신 이메일과 내 메일로 동시에 자동 발송됩니다.'
+      : '지금은 이메일 발송을 누르면 폰의 메일 앱이 견적 내용으로 채워진 채 열립니다. 아래 설정에서 EmailJS를 연결하면 앱에서 바로 자동발송됩니다.';
+  }
+}
+
+function wireQuoteEvents() {
+  if (!$('#quoteForm')) return;
+
+  // 텍스트 필드 → 모델
+  QUOTE_TEXT_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      if (!qDraft) qDraft = newQuoteDraft();
+      qDraft[key] = el.value;
+      refreshQuoteTotals();
+      queueQuotePreview();
+      if (key === 'notes') {
+        qSettings().notes = el.value;
+        save();
+      }
+    });
+    el.addEventListener('change', () => {
+      if (!qDraft) return;
+      qDraft[key] = el.value;
+      refreshQuoteTotals();
+      queueQuotePreview();
+    });
+  });
+
+  // 공급자 정보 → localStorage
+  QUOTE_SUPPLIER_FIELDS.forEach(([sel, key]) => {
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener('input', () => {
+      qSupplier()[key] = el.value;
+      save();
+      queueQuotePreview();
+    });
+  });
+
+  const vat = $('#qVat');
+  if (vat) {
+    vat.addEventListener('change', () => {
+      qDraft.vat = vat.checked;
+      qSettings().vat = vat.checked;
+      save();
+      refreshQuoteTotals();
+      queueQuotePreview();
+    });
+  }
+
+  const myEmail = $('#qMyEmail');
+  if (myEmail) {
+    myEmail.addEventListener('input', () => {
+      qSettings().myEmail = myEmail.value.trim();
+      save();
+    });
+  }
+
+  // 빠른 선택 칩
+  const chips = $('#qTypeChips');
+  if (chips) {
+    chips.addEventListener('click', ev => {
+      const btn = ev.target.closest('[data-qtype]');
+      if (!btn) return;
+      const t = typeById(btn.dataset.qtype);
+      if (!t) return;
+      const same = qDraft.items.find(it => String(it.name).trim() === String(t.name).trim());
+      if (same) {
+        same.qty = toNum(same.qty) + 1;
+        if (!toNum(same.price)) same.price = t.price;
+        refreshQuoteTotals();
+        renderQuoteRows();
+        queueQuotePreview();
+        toast(t.name + ' 수량을 1 늘렸습니다 (' + same.qty + ')');
+        return;
+      }
+      const blank = qDraft.items.find(it => !String(it.name).trim() && !toNum(it.price));
+      if (blank) {
+        blank.name = t.name;
+        blank.price = t.price;
+        if (!toNum(blank.qty)) blank.qty = 1;
+      } else {
+        qDraft.items.push(blankQuoteItem(t.name, '기본', 'EA', 1, t.price));
+      }
+      renderQuoteRows();
+      refreshQuoteTotals();
+      queueQuotePreview();
+      toast(t.name + ' 추가 · ' + won(t.price));
+    });
+  }
+
+  const addRow = $('#quoteAddRow');
+  if (addRow) {
+    addRow.addEventListener('click', () => {
+      qDraft.items.push(blankQuoteItem());
+      renderQuoteRows();
+      refreshQuoteTotals();
+      queueQuotePreview();
+      const rows = $$('#quoteRows .q-row');
+      const last = rows[rows.length - 1];
+      const input = last && $('.qr-name', last);
+      if (input) input.focus();
+    });
+  }
+
+  const rowsBox = $('#quoteRows');
+  if (rowsBox) {
+    rowsBox.addEventListener('input', ev => {
+      const t = ev.target;
+      if (!t.matches('input')) return;
+      const row = t.closest('.q-row');
+      if (!row) return;
+      const it = qDraft.items.find(x => x.k === row.dataset.k);
+      if (!it) return;
+      if (t.classList.contains('qr-name')) it.name = t.value;
+      else if (t.classList.contains('qr-spec')) it.spec = t.value;
+      else if (t.classList.contains('qr-unit')) it.unit = t.value;
+      else if (t.classList.contains('qr-qty')) {
+        const clean = t.value.replace(/[^\d]/g, '').slice(0, 4);
+        if (t.value !== clean) t.value = clean;
+        it.qty = toNum(clean);
+      } else if (t.classList.contains('qr-price')) {
+        const caretEnd = t.selectionStart === t.value.length;
+        const v = toNum(t.value);
+        it.price = v;
+        if (caretEnd) t.value = v ? wonPlain(v) : '';
+      }
+      const box = $('.qr-amount', row);
+      if (box) box.innerHTML = quoteRowAmountHtml(it);
+      refreshQuoteTotals();
+      queueQuotePreview();
+    });
+    rowsBox.addEventListener('click', ev => {
+      const del = ev.target.closest('[data-qdel]');
+      if (!del) return;
+      qDraft.items = qDraft.items.filter(x => x.k !== del.dataset.qdel);
+      if (!qDraft.items.length) qDraft.items = [blankQuoteItem()];
+      renderQuoteRows();
+      refreshQuoteTotals();
+      queueQuotePreview();
+    });
+  }
+
+  const noAuto = $('#qNoAuto');
+  if (noAuto) {
+    noAuto.addEventListener('click', () => {
+      qDraft.no = nextQuoteNo(qDraft.date);
+      $('#qNo').value = qDraft.no;
+      queueQuotePreview();
+      toast('견적번호를 ' + qDraft.no + ' 로 정했습니다.');
+    });
+  }
+
+  const notesReset = $('#qNotesReset');
+  if (notesReset) {
+    notesReset.addEventListener('click', () => {
+      if (!confirm('비고를 기본 표준 문구로 되돌릴까요?')) return;
+      qDraft.notes = DEFAULT_QUOTE_NOTES;
+      qSettings().notes = DEFAULT_QUOTE_NOTES;
+      $('#qNotes').value = DEFAULT_QUOTE_NOTES;
+      save();
+      queueQuotePreview();
+      toast('기본 문구로 되돌렸습니다.');
+    });
+  }
+
+  const newBtn = $('#quoteNew');
+  if (newBtn) {
+    newBtn.addEventListener('click', () => {
+      if (!confirm('새 견적서를 작성할까요? 지금 작성 중인 내용은 저장하지 않으면 사라집니다.')) return;
+      qDraft = newQuoteDraft();
+      $('#qNotes').value = qDraft.notes;
+      fillQuoteForm();
+      renderQuotePreview();
+      toast('새 견적서 · ' + qDraft.no);
+    });
+  }
+
+  const saveBtn = $('#quoteSave');
+  if (saveBtn) saveBtn.addEventListener('click', saveQuote);
+
+  const printBtn = $('#quotePrint');
+  if (printBtn) printBtn.addEventListener('click', printQuote);
+
+  const pngBtn = $('#quotePng');
+  if (pngBtn) {
+    pngBtn.addEventListener('click', async () => {
+      pngBtn.disabled = true;
+      const size = await downloadQuotePng();
+      pngBtn.disabled = false;
+      toast(size ? '이미지를 저장했습니다 · ' + Math.round(size / 1024) + 'KB' : '이미지를 만들지 못했습니다.');
+    });
+  }
+
+  const emailBtn = $('#quoteEmail');
+  if (emailBtn) emailBtn.addEventListener('click', sendQuoteEmail);
+
+  const hist = $('#quoteHistoryList');
+  if (hist) {
+    hist.addEventListener('click', ev => {
+      const btn = ev.target.closest('[data-qact]');
+      if (!btn) return;
+      const q = quoteList().find(x => x.id === btn.dataset.id);
+      if (!q) return;
+      const act = btn.dataset.qact;
+      if (act === 'load') loadQuoteIntoForm(q, false);
+      else if (act === 'copy') loadQuoteIntoForm(q, true);
+      else if (act === 'del') deleteQuote(q.id);
+      else if (act === 'sales') quoteToSales(q);
+    });
+  }
+
+  const ejSave = $('#qEjSave');
+  if (ejSave) {
+    ejSave.addEventListener('click', () => {
+      const cfg = {
+        serviceId: $('#qEjService').value.trim(),
+        templateId: $('#qEjTemplate').value.trim(),
+        publicKey: $('#qEjPublic').value.trim()
+      };
+      qSettings().emailjs = cfg;
+      save();
+      renderEmailCfgState();
+      if (cfg.serviceId && cfg.templateId && cfg.publicKey) toast('EmailJS 설정을 저장했습니다 · 이제 1클릭 자동발송');
+      else toast('세 항목을 모두 채워야 자동발송이 켜집니다.');
+    });
+  }
+  const ejClear = $('#qEjClear');
+  if (ejClear) {
+    ejClear.addEventListener('click', () => {
+      qSettings().emailjs = { serviceId: '', templateId: '', publicKey: '' };
+      $('#qEjService').value = '';
+      $('#qEjTemplate').value = '';
+      $('#qEjPublic').value = '';
+      save();
+      renderEmailCfgState();
+      toast('EmailJS 설정을 지웠습니다 · 메일 앱으로 열기 모드');
+    });
+  }
+
+  window.addEventListener('resize', debounce(() => {
+    if (state.view.tab === 'quote') fitQuotePreview();
+  }, 160));
+
+  window.addEventListener('beforeprint', () => {
+    if (state.view.tab === 'quote') buildPrintSheet();
+  });
+}
 
 /* --------------------- 홈 화면 설치 · 오프라인 캐시 --------------------- */
 /* sw.js 는 앱 폴더 기준 상대 경로라 GitHub Pages 하위 경로(/저장소/)에서도 동작합니다.
@@ -1623,6 +2957,23 @@ window.haemilApp = {
     save();
   },
   csv(scope) { return buildCsv(scope || 'period'); },
+  /* 견적서 확인용 */
+  quote() {
+    if (!qDraft) return null;
+    const t = quoteTotals(qDraft);
+    return {
+      draft: JSON.parse(JSON.stringify(qDraft)),
+      totals: t,
+      hangul: hangulNumber(t.total),
+      saved: quoteList().length
+    };
+  },
+  quoteHangul(n) { return hangulNumber(n); },
+  quoteMailto() { return buildQuoteMailto(qDraft, qSettings().myEmail); },
+  lastMailto() { return qLastMailto; },
+  quotePngSize() {
+    return downloadQuotePng();
+  },
   resetStorage() {
     try { localStorage.removeItem(LS_KEY); } catch (e) { /* noop */ }
     state.data = freshData();
