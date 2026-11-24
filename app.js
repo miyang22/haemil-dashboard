@@ -2495,6 +2495,28 @@ function downloadQuotePng() {
   });
 }
 
+/** 견적서를 새 탭에 원본 크기로 열어 폰에서도 크게 본다(집기(핀치) 확대 가능). */
+function openQuoteImage() {
+  try {
+    const canvas = buildQuoteCanvas();
+    canvas.toBlob(blob => {
+      if (!blob) { toast('이미지를 만들지 못했습니다.'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
+    }, 'image/png');
+  } catch (err) {
+    console.error(err);
+    toast('이미지를 만들지 못했습니다.');
+  }
+}
+
 /* ------------------------------ 이메일 ------------------------------ */
 function isEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(s || '').trim());
@@ -2881,6 +2903,9 @@ function wireQuoteEvents() {
 
   const emailBtn = $('#quoteEmail');
   if (emailBtn) emailBtn.addEventListener('click', sendQuoteEmail);
+
+  const zoomBtn = $('#quoteZoom');
+  if (zoomBtn) zoomBtn.addEventListener('click', openQuoteImage);
 
   const hist = $('#quoteHistoryList');
   if (hist) {

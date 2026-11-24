@@ -1305,3 +1305,8 @@ select {
     min-height: 0;
   }
 }
+
+/* 견적서 미리보기 머리말: 좁은 화면에서는 설명 숨김 */
+@media (max-width: 559px) {
+  .q-hide-sm { display: none; }
+}
