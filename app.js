@@ -1953,8 +1953,8 @@ function renderQuoteRows() {
     '<div class="q-row" data-k="' + it.k + '">' +
       '<input type="text" class="qr-name" value="' + esc(it.name) + '" placeholder="품목 (예: 시스템에어컨_4웨이)" aria-label="' + (i + 1) + '번째 품목" autocomplete="off">' +
       '<input type="text" class="qr-spec" value="' + esc(it.spec) + '" placeholder="기본" aria-label="' + (i + 1) + '번째 규격/사양" autocomplete="off">' +
-      '<input type="text" class="qr-unit" value="' + esc(it.unit) + '" placeholder="EA" aria-label="' + (i + 1) + '번째 단위" autocomplete="off">' +
       '<input type="text" class="qr-qty" inputmode="numeric" value="' + toNum(it.qty) + '" aria-label="' + (i + 1) + '번째 수량">' +
+      '<input type="text" class="qr-unit" value="' + esc(it.unit) + '" placeholder="EA" aria-label="' + (i + 1) + '번째 단위" autocomplete="off">' +
       '<input type="text" class="qr-price money-input" inputmode="numeric" value="' + (toNum(it.price) ? wonPlain(it.price) : '') + '" placeholder="단가" aria-label="' + (i + 1) + '번째 단가">' +
       '<div class="qr-amount">' + quoteRowAmountHtml(it) + '</div>' +
       '<button type="button" class="qr-del" data-qdel="' + it.k + '" aria-label="' + (i + 1) + '번째 품목 삭제">✕</button>' +

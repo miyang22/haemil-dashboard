@@ -894,7 +894,7 @@ select {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-areas:
     "name name del"
-    "spec unit qty"
+    "spec qty unit"
     "price price amount";
   gap: 6px;
   padding: 9px;
@@ -1265,7 +1265,7 @@ select {
   }
   .q-row {
     grid-template-columns: minmax(0, 1fr) 84px 54px 54px 104px 116px 32px;
-    grid-template-areas: "name spec unit qty price amount del";
+    grid-template-areas: "name spec qty unit price amount del";
     align-items: center;
   }
   .q-row .qr-del { align-self: center; }
