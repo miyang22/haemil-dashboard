@@ -275,6 +275,7 @@ function normalize(raw) {
       updatedAt: e.updatedAt || Date.now()
     })),
     settings: Object.assign({ samplePrices: false }, raw.settings || {}),
+    quoteDraft: raw.quoteDraft && typeof raw.quoteDraft === 'object' ? raw.quoteDraft : null,
     quotes: Array.isArray(raw.quotes) ? raw.quotes.filter(q => q && typeof q === 'object').map(normalizeQuote) : [],
     quoteSupplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER, raw.quoteSupplier && typeof raw.quoteSupplier === 'object' ? {
       name: String(raw.quoteSupplier.name == null ? DEFAULT_QUOTE_SUPPLIER.name : raw.quoteSupplier.name),
@@ -1980,9 +1981,40 @@ function refreshQuoteTotals() {
 }
 
 /* ------------------------------ 미리보기(A4) ------------------------------ */
+/** 작성 중인 견적서를 기기에 임시 저장 — 앱을 닫았다 열어도 이어서 쓸 수 있게 */
+function persistQuoteDraft() {
+  if (!qDraft) return;
+  state.data.quoteDraft = qDraft;
+  save();
+}
+
 function queueQuotePreview() {
   clearTimeout(qPreviewTimer);
-  qPreviewTimer = setTimeout(renderQuotePreview, 110);
+  qPreviewTimer = setTimeout(() => {
+    persistQuoteDraft();
+    renderQuotePreview();
+  }, 110);
+}
+
+/** 저장해 둔 임시 견적서를 안전한 모양으로 되살립니다. */
+function reviveQuoteDraft(raw) {
+  const base = newQuoteDraft();
+  if (!raw || typeof raw !== 'object') return base;
+  const items = (Array.isArray(raw.items) ? raw.items : []).map(it =>
+    blankQuoteItem(it && it.name, it && it.spec, it && it.unit, it && it.qty, it && it.price)
+  );
+  return {
+    id: raw.id ? String(raw.id) : null,
+    date: String(raw.date || base.date).slice(0, 10),
+    no: String(raw.no || base.no),
+    receiver: String(raw.receiver || ''),
+    receiverEmail: String(raw.receiverEmail || ''),
+    ref: String(raw.ref || ''),
+    valid: String(raw.valid || base.valid),
+    items: items.length ? items : [blankQuoteItem()],
+    vat: raw.vat !== false,
+    notes: typeof raw.notes === 'string' ? raw.notes : base.notes
+  };
 }
 
 function setText(sel, value) {
@@ -2105,6 +2137,7 @@ function loadQuoteIntoForm(quote, asCopy) {
   };
   if (!qDraft.items.length) qDraft.items = [blankQuoteItem()];
   fillQuoteForm();
+  persistQuoteDraft();
   renderQuotePreview();
   $('#quoteMode').textContent = asCopy ? '복제본 작성 중 · ' + qDraft.no : '불러옴 · ' + (quote.no || '');
   if (window.scrollTo) window.scrollTo({ top: 0 });
@@ -2678,7 +2711,7 @@ async function sendQuoteEmail() {
 
 /* ------------------------------ 초기화 · 이벤트 ------------------------------ */
 function initQuote() {
-  qDraft = newQuoteDraft();
+  qDraft = reviveQuoteDraft(state.data.quoteDraft);
   fillQuoteForm();
   renderQuotePreview();
   renderQuoteHistory();
@@ -2880,6 +2913,7 @@ function wireQuoteEvents() {
       qDraft = newQuoteDraft();
       $('#qNotes').value = qDraft.notes;
       fillQuoteForm();
+      persistQuoteDraft();
       renderQuotePreview();
       toast('새 견적서 · ' + qDraft.no);
     });

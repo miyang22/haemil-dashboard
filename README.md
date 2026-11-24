@@ -90,6 +90,11 @@ sites/haemil-dashboard/
   그 밖에 `{{subject}}` `{{quote_no}}` `{{quote_date}}` `{{receiver}}` `{{total}}` `{{total_krw}}` `{{items_summary}}` `{{account}}` `{{from_name}}` `{{reply_to}}` 를 쓸 수 있습니다.
 - EmailJS 설정값도 이 기기의 localStorage 에만 저장됩니다.
 
+### 작성 중인 견적서
+
+작성하다 앱을 닫아도 **마지막으로 쓰던 견적서가 기기에 임시 저장**되어, 다시 열면 이어서 쓸 수 있습니다.
+**새 견적**을 누르면 초안이 비워집니다.
+
 ### 발행 내역
 
 저장한 견적서는 **발행 내역**에 쌓입니다. **불러오기**로 다시 열어 고치거나 다시 인쇄하고,
