@@ -3850,12 +3850,14 @@ function resvMergeRemote(remote) {
       return;
     }
 
+    // 행 번호로 먼저 찾고, 아니면 고객명+예약일로 다시 찾습니다(시트에서 행이 밀린 경우).
     let rem = it.row ? byRow.get(Number(it.row)) : null;
+    if (rem && claimed.has(Number(rem.row))) rem = null;
     if (rem && !resvSameName(it, rem)) {
       const alt = rows.find(x => !claimed.has(Number(x.row)) && resvKeyOf(x) === resvKeyOf(it));
       if (alt) rem = alt;
     }
-    if (!rem && !it.row) {
+    if (!rem) {
       rem = rows.find(x => !claimed.has(Number(x.row)) && resvKeyOf(x) === resvKeyOf(it)) || null;
     }
 
@@ -3880,57 +3882,48 @@ function resvMergeRemote(remote) {
   return dropped;
 }
 
-/** 앱에서 고친 것과 삭제 대기를 시트로 보냅니다. 보낸 개수를 돌려줍니다. */
+/** 앱에서 고친 것과 삭제 대기를 시트로 보냅니다(한 건씩 순서대로). 보낸 개수를 돌려줍니다. */
 function resvPushPending() {
   const cfg = resvSyncCfg();
-  const work = [];
   let ops = 0;
 
-  const dels = (cfg.pendingDeletes || []).slice().sort((a, b) => Number(b.row) - Number(a.row));
-  for (let i = 0; i < dels.length; i++) {
-    const d = dels[i];
-    work.push(
-      resvApi('delete', { row: Number(d.row), name: d.name })
-        .then(() => {
-          cfg.pendingDeletes = (cfg.pendingDeletes || []).filter(x => x !== d);
-          ops += 1;
-        })
-        .catch(err => {
-          const msg = String((err && err.message) || err);
-          if (msg.indexOf('행이 없습니다') >= 0 || msg.indexOf('행 번호가 없습니다') >= 0 || msg.indexOf('skipped') >= 0) {
-            cfg.pendingDeletes = (cfg.pendingDeletes || []).filter(x => x !== d);
-            return;
-          }
-          throw err;
-        })
-    );
-  }
+  return (async () => {
+    // 삭제는 아래 행부터 지워야 위 행 번호가 밀리지 않습니다.
+    const dels = (cfg.pendingDeletes || []).slice().sort((a, b) => Number(b.row) - Number(a.row));
+    for (const d of dels) {
+      try {
+        await resvApi('delete', { row: Number(d.row), name: d.name });
+      } catch (err) {
+        const msg = String((err && err.message) || err);
+        if (!/행이 없습니다|행 번호가 없습니다/.test(msg)) throw err;
+      }
+      cfg.pendingDeletes = (cfg.pendingDeletes || []).filter(x => x !== d);
+      ops += 1;
+    }
 
-  resvList().forEach(it => {
-    if (it.sample) return;
-    if (!it.pending && it.row) return;
-    if (!it.pending && !it.row) it.pending = true;
-
-    work.push((async () => {
-      const payload = { item: resvSheetPayload(it) };
+    const items = resvList().slice();
+    for (const it of items) {
+      if (it.sample) continue;
+      if (!it.pending && it.row) continue;
+      it.pending = true;
+      const item = resvSheetPayload(it);
       if (it.row) {
         try {
-          await resvApi('update', { row: it.row, item: payload.item });
+          await resvApi('update', { row: it.row, item: item });
         } catch (err) {
-          it.row = null;  // 그 행이 사라졌으면 아래에서 새로 추가
+          it.row = null;    // 그 행이 사라졌으면 아래에서 새로 추가합니다
         }
       }
       if (!it.row) {
-        const res = await resvApi('append', payload);
+        const res = await resvApi('append', { item: item });
         it.row = Number(res.row) || null;
       }
       it.pending = false;
       ops += 1;
       save();
-    })());
-  });
-
-  return Promise.all(work).then(() => ops);
+    }
+    return ops;
+  })();
 }
 
 function resvSchedulePush() {
@@ -3956,7 +3949,15 @@ function resvSyncNow(opts) {
   return resvApi('list')
     .then(res => {
       const dropped = resvMergeRemote(res.items || []);
-      return resvPushPending().then(pushed => ({ pushed: pushed, dropped: dropped, count: res.items ? res.items.length : 0 }));
+      const total = res.items ? res.items.length : 0;
+      return resvPushPending().then(pushed => {
+        if (!pushed) return { pushed: 0, dropped: dropped, count: total };
+        // 방금 보낸 내용(특히 삭제로 행이 밀린 것)을 반영해 행 번호를 다시 맞춥니다.
+        return resvApi('list').then(res => {
+          resvMergeRemote(res.items || []);
+          return { pushed: pushed, dropped: dropped, count: res.items ? res.items.length : total };
+        });
+      });
     })
     .then(info => {
       cfg.lastSyncAt = Date.now();
