@@ -1,0 +1,243 @@
+/*************************************************************
+ * 해밀 영업지도 · 노원구 학원 영업DB 시트 연동 (Google Apps Script)
+ *
+ * 대상 시트: [영업DB] 노원구 학원 목록 / 탭: 학원목록
+ *   A 번호 | B 학원명 | C 구분 | D 동 | E 주소 | F 우편번호 | G 전화번호 | H 분야
+ *   I 교습계열 | J 교습과정 | K 정원 | L 개설일자 | M 학원지정번호 | N 영업상태
+ *   O 방문메모 | P 위도 | Q 경도
+ *
+ * 사용법
+ *  1) 시트에서 [확장 프로그램 → Apps Script] 를 엽니다.
+ *  2) 이 코드를 통째로 붙여넣고 저장(Ctrl+S)합니다.
+ *  3) [배포 → 새 배포 → 유형: 웹 앱]
+ *     - 설명: 해밀 영업지도
+ *     - 실행: 나
+ *     - 액세스: 모든 사용자
+ *     → [배포]
+ *  4) 나온 '웹 앱 URL'(.../exec)을 앱 설정 → 구글 시트 연동에 붙여넣고 [저장하고 연결].
+ *
+ * 코드를 고친 뒤에는 [배포 → 배포 관리 → 수정 → 새 버전] 으로 다시 배포해야 반영됩니다.
+ * TOKEN 에 글자를 넣으면, 앱 설정의 '접근 토큰'에 같은 글자를 넣어야 읽고 쓸 수 있습니다.
+ *************************************************************/
+
+var SHEET_NAME = '학원목록';   // 탭 이름 (다르면 고쳐 주세요)
+var TOKEN = '';                // 접근 토큰(선택). 예: 'haemil-2026'
+var TIMEZONE = 'Asia/Seoul';
+
+var HEAD = ['번호', '학원명', '구분', '동', '주소', '우편번호', '전화번호', '분야', '교습계열',
+  '교습과정', '정원', '개설일자', '학원지정번호', '영업상태', '방문메모', '위도', '경도'];
+var KEYS = ['no', 'name', 'kind', 'dong', 'addr', 'zip', 'phone', 'field', 'track',
+  'course', 'cap', 'opened', 'regno', 'status', 'memo', 'lat', 'lng'];
+
+function doGet(e) {
+  return handle_(e);
+}
+
+function doPost(e) {
+  return handle_(e);
+}
+
+function handle_(e) {
+  var p = (e && e.parameter) || {};
+  var body = {};
+  if (e && e.postData && e.postData.contents) {
+    try { body = JSON.parse(e.postData.contents) || {}; } catch (err) { body = {}; }
+  }
+
+  var action = String(p.action || body.action || 'list');
+  var data = body;
+  if (p.data) {
+    try { data = JSON.parse(p.data) || {}; } catch (err) { data = {}; }
+  }
+
+  var out;
+  var lock = null;
+  try {
+    if (TOKEN && String(p.t || data.t || '') !== TOKEN) {
+      throw new Error('접근 토큰이 맞지 않습니다.');
+    }
+    if (action === 'list' || action === 'ping') {
+      out = apiList_();
+    } else if (action === 'update') {
+      lock = lock_();
+      out = apiUpdate_(Number(data.row || p.row), data.item || {});
+    } else if (action === 'append') {
+      lock = lock_();
+      out = apiAppend_(data.item || {});
+    } else {
+      throw new Error('알 수 없는 요청입니다: ' + action);
+    }
+  } catch (err) {
+    out = { ok: false, error: String((err && err.message) || err) };
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (err2) {} }
+  }
+
+  return reply_(out, p.callback);
+}
+
+function lock_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error('시트가 다른 요청을 처리 중입니다. 잠시 뒤 다시 시도해 주세요.');
+  return lock;
+}
+
+function reply_(obj, callback) {
+  var name = String(callback || '').replace(/[^A-Za-z0-9_$.]/g, '');
+  var json = JSON.stringify(obj);
+  if (name) {
+    return ContentService.createTextOutput(name + '(' + json + ');')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ------------------------------ 시트 ------------------------------ */
+function sheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.getSheets()[0];
+  return sh;
+}
+
+/** 머리글 이름으로 열 위치를 찾고, 못 찾으면 HEAD 순서(1~17)를 씁니다. */
+function cols_(sh) {
+  var width = Math.max(HEAD.length, sh.getLastColumn());
+  var head = sh.getRange(1, 1, 1, width).getDisplayValues()[0];
+  var map = {};
+  for (var i = 0; i < KEYS.length; i++) {
+    var target = String(HEAD[i]).replace(/\s/g, '');
+    var found = -1;
+    for (var j = 0; j < head.length; j++) {
+      if (String(head[j]).replace(/\s/g, '') === target) { found = j; break; }
+    }
+    map[KEYS[i]] = found >= 0 ? found + 1 : i + 1;
+  }
+  return map;
+}
+
+function text_(v) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd');
+  return String(v).trim();
+}
+
+function num_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  var n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+  return isFinite(n) ? n : null;
+}
+
+function apiList_() {
+  var sh = sheet_();
+  var c = cols_(sh);
+  var last = sh.getLastRow();
+  var items = [];
+  if (last >= 2) {
+    var width = Math.max(HEAD.length, sh.getLastColumn());
+    var vals = sh.getRange(2, 1, last - 1, width).getDisplayValues();
+    for (var i = 0; i < vals.length; i++) {
+      var r = vals[i];
+      var name = text_(r[c.name - 1]);
+      if (!name) continue;
+      items.push({
+        row: i + 2,
+        no: num_(r[c.no - 1]),
+        name: name,
+        kind: text_(r[c.kind - 1]),
+        dong: text_(r[c.dong - 1]),
+        addr: text_(r[c.addr - 1]),
+        zip: text_(r[c.zip - 1]),
+        phone: text_(r[c.phone - 1]),
+        field: text_(r[c.field - 1]),
+        track: text_(r[c.track - 1]),
+        course: text_(r[c.course - 1]),
+        cap: num_(r[c.cap - 1]),
+        opened: text_(r[c.opened - 1]),
+        regno: text_(r[c.regno - 1]),
+        status: text_(r[c.status - 1]),
+        memo: text_(r[c.memo - 1]),
+        lat: num_(r[c.lat - 1]),
+        lng: num_(r[c.lng - 1])
+      });
+    }
+  }
+  return {
+    ok: true,
+    sheet: '노원구 학원 목록',
+    tab: sh.getName(),
+    count: items.length,
+    items: items,
+    updated: new Date().toISOString()
+  };
+}
+
+function apiAppend_(item) {
+  var sh = sheet_();
+  var c = cols_(sh);
+  var row = Math.max(2, sh.getLastRow() + 1);
+  if (item && (item.no === null || item.no === undefined || item.no === '')) {
+    item.no = nextNo_(sh, c);
+  }
+  writeRow_(sh, c, row, item, true);
+  return { ok: true, row: row, no: item.no };
+}
+
+function apiUpdate_(row, item) {
+  var sh = sheet_();
+  if (!(row >= 2)) throw new Error('행 번호가 없습니다.');
+  if (row > sh.getLastRow()) throw new Error('그 행이 없습니다. 시트에서 지워졌을 수 있습니다.');
+  writeRow_(sh, cols_(sh), row, item, false);
+  return { ok: true, row: row };
+}
+
+function nextNo_(sh, c) {
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  var vals = sh.getRange(2, c.no, last - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < vals.length; i++) {
+    var n = num_(vals[i][0]);
+    if (n && n > max) max = n;
+  }
+  return max + 1;
+}
+
+function writeRow_(sh, c, row, item, isNew) {
+  if (!item) return;
+  var set = function (key, value, numeric) {
+    if (!(key in item)) return;
+    if (value === null || value === undefined || value === '') {
+      sh.getRange(row, c[key]).setValue('');
+      return;
+    }
+    sh.getRange(row, c[key]).setValue(numeric ? Number(value) : String(value));
+  };
+
+  set('name', text_(item.name), false);
+  set('kind', text_(item.kind), false);
+  set('dong', text_(item.dong), false);
+  set('addr', text_(item.addr), false);
+  set('zip', text_(item.zip), false);
+  set('phone', text_(item.phone), false);
+  set('field', text_(item.field), false);
+  set('track', text_(item.track), false);
+  set('course', text_(item.course), false);
+  set('cap', item.cap, true);
+  set('opened', text_(item.opened), false);
+  set('regno', text_(item.regno), false);
+  set('status', text_(item.status), false);
+  set('memo', text_(item.memo), false);
+  set('lat', item.lat, true);
+  set('lng', item.lng, true);
+  if (isNew && item.no !== null && item.no !== undefined) {
+    set('no', item.no, true);
+  }
+}
+
+/* --------------------- 처음 한 번 확인용 (에디터에서 실행) --------------------- */
+function testList() {
+  var res = apiList_();
+  Logger.log('탭: ' + res.tab + ' / ' + res.count + '건');
+  if (res.items.length) Logger.log(JSON.stringify(res.items[0]));
+}
