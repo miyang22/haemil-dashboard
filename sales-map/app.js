@@ -788,6 +788,7 @@ function openDetail(item, pan) {
     '<a class="btn ghost" href="' + esc(kmap) + '">카카오맵</a>' +
     '<a class="btn ghost" href="' + esc(tmap) + '">티맵</a>' +
     '</div>';
+  h += '<button class="btn ghost mapjump" type="button" id="dMap">지도에서 위치 보기</button>';
 
   h += '<div class="d-info">';
   h += '<div class="d-line"><span class="k">주소</span><span class="v">' + esc(item.addr || '—') + '</span></div>';
@@ -1194,6 +1195,7 @@ function locate(opts) {
       },
       err => {
         if (btn) btn.classList.remove('busy');
+        if (S.prefs.sort === 'dist' && !S.me) { S.prefs.sort = 'cap'; const ss = $('#sortSel'); if (ss) ss.value = 'cap'; }
         const msg = err && err.code === 1 ? '위치 권한이 꺼져 있습니다. 브라우저 설정에서 허용해 주세요.' : '위치를 가져오지 못했습니다.';
         toast(msg, 3200);
         resolve(false);
@@ -1303,6 +1305,15 @@ function bind() {
       renderAll();
       openDetail(it, false);
       toast(key + '(으)로 바꿨습니다' + (S.cfg.url ? ' · 시트에 저장 중' : ''));
+      return;
+    }
+    if (e.target.closest('#dMap') && detailId) {
+      const it = itemById(detailId);
+      closeSheets();
+      setView('map');
+      if (it && it.lat != null && map) {
+        setTimeout(() => { map.setView([it.lat, it.lng], 17); highlightMarker(it.id); }, 220);
+      }
       return;
     }
     if (e.target.closest('#dSave') && detailId) {
