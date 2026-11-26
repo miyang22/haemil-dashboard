@@ -7,9 +7,9 @@
    ========================================================================== */
 'use strict';
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 /* 같은 VERSION 안에서 파일만 고쳐 다시 배포할 때 이 값을 올리면 캐시가 새로 받아집니다. */
-const BUILD = '3';
+const BUILD = '1';
 const CACHE_PREFIX = 'haemil-dashboard-';
 const CACHE_NAME = CACHE_PREFIX + VERSION + '-' + BUILD;
 

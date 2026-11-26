@@ -224,6 +224,8 @@ function freshData() {
     sales: seed.sales,
     expenses: seed.expenses,
     quotes: [],
+    reservations: resvSampleSeed(),
+    resvSync: { url: '', token: '', lastSyncAt: 0, lastError: '', pendingDeletes: [] },
     quoteSupplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER),
     quoteSettings: {
       vat: true,
@@ -277,6 +279,20 @@ function normalize(raw) {
     settings: Object.assign({ samplePrices: false }, raw.settings || {}),
     quoteDraft: raw.quoteDraft && typeof raw.quoteDraft === 'object' ? raw.quoteDraft : null,
     quotes: Array.isArray(raw.quotes) ? raw.quotes.filter(q => q && typeof q === 'object').map(normalizeQuote) : [],
+    reservations: resvNormalizeList(raw.reservations),
+    resvSync: (function (src) {
+      const s = src && typeof src === 'object' ? src : {};
+      return {
+        url: String(s.url || ''),
+        token: String(s.token || ''),
+        lastSyncAt: Number(s.lastSyncAt) || 0,
+        lastError: String(s.lastError || ''),
+        pendingDeletes: Array.isArray(s.pendingDeletes)
+          ? s.pendingDeletes.filter(d => d && Number(d.row) >= 2)
+              .map(d => ({ row: Number(d.row), name: String(d.name || '') }))
+          : []
+      };
+    })(raw.resvSync),
     quoteSupplier: Object.assign({}, DEFAULT_QUOTE_SUPPLIER, raw.quoteSupplier && typeof raw.quoteSupplier === 'object' ? {
       name: String(raw.quoteSupplier.name == null ? DEFAULT_QUOTE_SUPPLIER.name : raw.quoteSupplier.name),
       person: String(raw.quoteSupplier.person == null ? DEFAULT_QUOTE_SUPPLIER.person : raw.quoteSupplier.person),
@@ -519,6 +535,13 @@ function switchTab(tab) {
     if (b.classList.contains('nav-btn')) b.setAttribute('aria-current', on ? 'page' : 'false');
   });
   if (tab === 'summary') renderSummary();
+  if (tab === 'resv') {
+    renderResv();
+    const cfg = resvSyncCfg();
+    if (cfg.url && !cfg.lastError && Date.now() - resvLastAutoPull > 2 * 60 * 1000) {
+      resvSyncNow({ silent: true });
+    }
+  }
   if (tab === 'entry') renderEntry();
   if (tab === 'quote') renderQuote();
   if (tab === 'expense') renderExpense();
@@ -1364,6 +1387,7 @@ function renderAll() {
   renderPeriodUI();
   switchTab(state.view.tab || 'summary');
   renderSummary();
+  renderResv();
   renderEntry();
   renderQuote();
   renderExpense();
@@ -1704,11 +1728,13 @@ function deleteCat(id) {
 }
 
 function wipeSample() {
-  const n = state.data.sales.filter(s => s.sample).length + state.data.expenses.filter(e => e.sample).length;
+  const n = state.data.sales.filter(s => s.sample).length + state.data.expenses.filter(e => e.sample).length
+    + resvList().filter(r => r.sample).length;
   if (!n) { toast('지울 예시 데이터가 없습니다.'); return; }
   if (!confirm('예시 기록 ' + n + '건을 지우고 빈 상태로 시작할까요?\n(단가·분류 설정은 그대로 남습니다.)')) return;
   state.data.sales = state.data.sales.filter(s => !s.sample);
   state.data.expenses = state.data.expenses.filter(e => !e.sample);
+  state.data.reservations = resvList().filter(r => !r.sample);
   state.editSale = null;
   state.editExpense = null;
   save();
@@ -1737,6 +1763,7 @@ function init() {
   fillExpenseForm(null);
   renderManage();
   initQuote();
+  initResv();
 
   $$('.tab-panel').forEach(p => p.classList.toggle('is-active', p.id === 'tab-' + state.view.tab));
   $$('[data-tab]').forEach(b => b.classList.toggle('is-active', b.dataset.tab === state.view.tab));
@@ -3042,3 +3069,1099 @@ window.haemilApp = {
     fillExpenseForm(null);
   }
 };
+
+/* ==========================================================================
+   통화예약 (Reservations) · Google Sheets 양방향 연동
+   - 구글시트 '통화예약 정리'(탭 시트1)의 6개 항목과 1:1 대응
+     고객명 | 주소 | 청소수량 | 예약확정 일 및 시간 | 완료여부 | 기타
+   - 시트 연동 전에도 로컬 저장 + 예시 2건으로 바로 사용 가능
+   - 연동: 구글 Apps Script 웹앱을 JSONP(script 태그)로 호출
+     (CORS 영향 없이 읽기·쓰기 모두 응답을 확인하고, 실패는 토스트로 알림)
+   ========================================================================== */
+
+const RESV_SHEET_ID = '14IO6RTTz3oITQYqPV_sC329-JbSPaCrv2cHlZm4kS7M';
+const RESV_SHEET_URL = 'https://docs.google.com/spreadsheets/d/' + RESV_SHEET_ID + '/edit';
+const RESV_TAB_NAME = '시트1';
+const RESV_HEADERS = ['고객명', '주소', '청소수량', '예약확정 일 및 시간', '완료여부', '기타'];
+const RESV_DONE_WORDS = ['완료', '완료됨', 'o', 'true', 'y', 'yes', '1', '✓', 'v', '완', 'ㅇ'];
+const RESV_QTY_PRESETS = [
+  '벽걸이 1대', '벽걸이 2대', '스탠드 1대', '벽걸이 1대 · 스탠드 1대',
+  '투인원 1대', '천장형 4way 2대', '시스템 4way 4대'
+];
+
+const RESV_CODE_GS = `/*************************************************************
+ * 해밀홈케어 · 통화예약 시트 연동 (Google Apps Script)
+ * 대상 시트: 통화예약 정리 / 탭: 시트1
+ * 열 순서: 고객명 | 주소 | 청소수량 | 예약확정 일 및 시간 | 완료여부 | 기타
+ *
+ * 사용법
+ *  1) 시트에서 [확장 프로그램 → Apps Script] 열기
+ *  2) 이 코드를 통째로 붙여넣고 저장(Ctrl+S)
+ *  3) [배포 → 새 배포 → 유형: 웹 앱]
+ *     - 실행: 나 / 액세스: 모든 사용자 → [배포]
+ *  4) 나온 '웹 앱 URL'을 대시보드 통화예약 탭 → 연동 설정에 붙여넣기
+ *
+ * 코드를 고친 뒤에는 [배포 → 배포 관리 → 수정 → 새 버전] 으로 다시 배포해야 반영됩니다.
+ *************************************************************/
+
+var SHEET_NAME = '시트1';   // 탭 이름 (다르면 고쳐 주세요)
+var TOKEN = '';             // 접근 토큰(선택): 앱의 '접근 토큰'과 같은 글자를 넣으면 주소를 알아도 못 읽습니다
+var TIMEZONE = 'Asia/Seoul';
+var HEAD = ['고객명', '주소', '청소수량', '예약확정 일 및 시간', '완료여부', '기타'];
+
+function doGet(e) {
+  return handle_(e);
+}
+
+function doPost(e) {
+  return handle_(e);
+}
+
+function handle_(e) {
+  var p = (e && e.parameter) || {};
+  var body = {};
+  if (e && e.postData && e.postData.contents) {
+    try { body = JSON.parse(e.postData.contents) || {}; } catch (err) { body = {}; }
+  }
+
+  var action = String(p.action || body.action || 'list');
+  var data = body;
+  if (p.data) {
+    try { data = JSON.parse(p.data) || {}; } catch (err) { data = {}; }
+  }
+
+  var out;
+  var lock = null;
+  try {
+    if (TOKEN && String(p.t || data.t || '') !== TOKEN) {
+      throw new Error('접근 토큰이 맞지 않습니다.');
+    }
+
+    if (action === 'list' || action === 'ping') {
+      out = apiList_();
+    } else if (action === 'append') {
+      lock = lock_();
+      out = apiAppend_(data.item || {});
+    } else if (action === 'update') {
+      lock = lock_();
+      out = apiUpdate_(Number(data.row || p.row), data.item || {});
+    } else if (action === 'delete') {
+      lock = lock_();
+      out = apiDelete_(Number(data.row || p.row), String(data.name || p.name || ''));
+    } else {
+      throw new Error('알 수 없는 요청입니다: ' + action);
+    }
+  } catch (err) {
+    out = { ok: false, error: String((err && err.message) || err) };
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (err2) {} }
+  }
+
+  return reply_(out, p.callback);
+}
+
+function lock_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error('시트가 다른 요청을 처리 중입니다. 잠시 뒤 다시 시도해 주세요.');
+  return lock;
+}
+
+function reply_(obj, callback) {
+  var name = String(callback || '').replace(/[^A-Za-z0-9_$.]/g, '');
+  var json = JSON.stringify(obj);
+  if (name) {
+    return ContentService.createTextOutput(name + '(' + json + ');')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ------------------------------ 시트 ------------------------------ */
+function sheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.getSheets()[0];
+  return sh;
+}
+
+function ensureHead_(sh) {
+  var first = String(sh.getRange(1, 1).getDisplayValue() || '').trim();
+  if (first) return;
+  sh.getRange(1, 1, 1, HEAD.length).setValues([HEAD]);
+}
+
+/** 머리글 이름으로 열 위치를 찾고, 없으면 기본 순서(1~6)를 씁니다. */
+function cols_(sh) {
+  var width = Math.max(HEAD.length, sh.getLastColumn());
+  var head = sh.getRange(1, 1, 1, width).getDisplayValues()[0];
+  var keys = ['name', 'addr', 'qty', 'when', 'done', 'memo'];
+  var map = {};
+  for (var i = 0; i < keys.length; i++) {
+    var target = String(HEAD[i]).replace(/\\s/g, '');
+    var found = -1;
+    for (var j = 0; j < head.length; j++) {
+      if (String(head[j]).replace(/\\s/g, '') === target) { found = j; break; }
+    }
+    map[keys[i]] = found >= 0 ? found + 1 : i + 1;
+  }
+  return map;
+}
+
+function text_(v) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return dateText_(v);
+  return String(v).trim();
+}
+
+function dateText_(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (v instanceof Date) return Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd HH:mm');
+  if (typeof v === 'number' && v > 20000) {
+    var ms = Math.round((v - 25569) * 86400000);
+    return Utilities.formatDate(new Date(ms), TIMEZONE, 'yyyy-MM-dd HH:mm');
+  }
+  return String(v).trim();
+}
+
+function done_(v) {
+  if (v === true) return true;
+  if (v === false || v === null || v === undefined || v === '') return false;
+  if (typeof v === 'number') return v !== 0;
+  var s = String(v).trim().toLowerCase();
+  return ['완료', '완료됨', 'o', 'true', 'y', 'yes', '1', '✓', 'v', '완', 'ㅇ'].indexOf(s) >= 0;
+}
+
+function apiList_() {
+  var sh = sheet_();
+  ensureHead_(sh);
+  var c = cols_(sh);
+  var last = sh.getLastRow();
+  var items = [];
+  if (last >= 2) {
+    var width = Math.max(HEAD.length, sh.getLastColumn());
+    var vals = sh.getRange(2, 1, last - 1, width).getValues();
+    for (var i = 0; i < vals.length; i++) {
+      var r = vals[i];
+      var name = text_(r[c.name - 1]);
+      var addr = text_(r[c.addr - 1]);
+      var qty = text_(r[c.qty - 1]);
+      var memo = text_(r[c.memo - 1]);
+      var when = dateText_(r[c.when - 1]);
+      var done = done_(r[c.done - 1]);
+      if (!name && !addr && !qty && !memo && !when && !done) continue;  // 빈 줄은 건너뜁니다
+      items.push({ row: i + 2, name: name, addr: addr, qty: qty, when: when, done: done, memo: memo });
+    }
+  }
+  return {
+    ok: true,
+    sheet: '통화예약 정리',
+    tab: sh.getName(),
+    count: items.length,
+    items: items,
+    updated: new Date().toISOString()
+  };
+}
+
+function apiAppend_(item) {
+  var sh = sheet_();
+  ensureHead_(sh);
+  var c = cols_(sh);
+  var row = Math.max(2, sh.getLastRow() + 1);
+  writeRow_(sh, c, row, item);
+  return { ok: true, row: row };
+}
+
+function apiUpdate_(row, item) {
+  var sh = sheet_();
+  ensureHead_(sh);
+  if (!(row >= 2)) throw new Error('행 번호가 없습니다.');
+  if (row > sh.getLastRow()) throw new Error('그 행이 없습니다. 시트에서 지워졌을 수 있습니다.');
+  writeRow_(sh, cols_(sh), row, item);
+  return { ok: true, row: row };
+}
+
+function apiDelete_(row, name) {
+  var sh = sheet_();
+  if (!(row >= 2)) throw new Error('행 번호가 없습니다.');
+  if (row > sh.getLastRow()) return { ok: true, row: row, skipped: true };
+
+  var c = cols_(sh);
+  var cur = String(text_(sh.getRange(row, c.name).getValue())).replace(/\\s/g, '');
+  var want = String(name || '').replace(/\\s/g, '');
+  if (want && cur && cur !== want) {
+    throw new Error('행 내용이 달라 삭제하지 않았습니다(그 행: ' + cur + ').');
+  }
+  sh.deleteRow(row);
+  return { ok: true, row: row };
+}
+
+function writeRow_(sh, c, row, item) {
+  if (!item) return;
+  if ('name' in item) sh.getRange(row, c.name).setValue(text_(item.name));
+  if ('addr' in item) sh.getRange(row, c.addr).setValue(text_(item.addr));
+  if ('qty' in item) sh.getRange(row, c.qty).setValue(text_(item.qty));
+  if ('when' in item) sh.getRange(row, c.when).setValue(String(item.when || ''));
+  if ('done' in item) sh.getRange(row, c.done).setValue(item.done ? '완료' : '미완료');
+  if ('memo' in item) sh.getRange(row, c.memo).setValue(text_(item.memo));
+}
+`;
+
+/* ------------------------------ 상태 ------------------------------ */
+let resvFilter = 'all';
+let resvQuery = '';
+let resvEditing = null;
+let resvBusy = false;
+let resvAgain = false;
+let resvJsonpSeq = 0;
+let resvPushTimer = null;
+let resvLastAutoPull = 0;
+
+/* ------------------------------ 데이터 ------------------------------ */
+function resvSyncCfg() {
+  const d = state.data;
+  if (!d) return { url: '', token: '', lastSyncAt: 0, lastError: '', pendingDeletes: [] };
+  if (!d.resvSync || typeof d.resvSync !== 'object') {
+    d.resvSync = { url: '', token: '', lastSyncAt: 0, lastError: '', pendingDeletes: [] };
+  }
+  const s = d.resvSync;
+  if (!Array.isArray(s.pendingDeletes)) s.pendingDeletes = [];
+  s.url = String(s.url || '');
+  s.token = String(s.token || '');
+  s.lastSyncAt = Number(s.lastSyncAt) || 0;
+  s.lastError = String(s.lastError || '');
+  return s;
+}
+
+function resvList() {
+  if (!Array.isArray(state.data.reservations)) state.data.reservations = [];
+  return state.data.reservations;
+}
+
+function resvById(id) { return resvList().find(r => r.id === id); }
+
+function resvSameName(a, b) {
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, '').toLowerCase();
+  return norm(a && a.name) === norm(b && b.name);
+}
+
+function resvKeyOf(x) {
+  const name = String((x && x.name) || '').replace(/\s+/g, '').toLowerCase();
+  const when = resvWhenNormalize((x && (x.when || x.whenText)) || '').replace(/\D/g, '');
+  return name + '#' + when;
+}
+
+/* 예약일 표기: 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:mm' */
+function resvJoinWhen(y, mo, d, h, mi) {
+  const yy = String(y);
+  const mm = pad2(Math.min(12, Math.max(1, Number(mo) || 1)));
+  const dd = pad2(Math.min(31, Math.max(1, Number(d) || 1)));
+  if (h == null || h === '') return yy + '-' + mm + '-' + dd;
+  const hh = pad2(Math.min(23, Math.max(0, Number(h) || 0)));
+  const mn = pad2(Math.min(59, Math.max(0, Number(mi) || 0)));
+  return yy + '-' + mm + '-' + dd + 'T' + hh + ':' + mn;
+}
+
+function resvWhenNormalize(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{4})\s*[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})(?:[.\sT]+(\d{1,2})\s*[:시]\s*(\d{1,2})?)?/);
+  if (m) return resvJoinWhen(m[1], m[2], m[3], m[4], m[5]);
+  m = s.match(/^(\d{1,2})\s*[-./월]\s*(\d{1,2})일?(?:[.\s]+(\d{1,2})\s*[:시]\s*(\d{1,2})?)?/);
+  if (m) return resvJoinWhen(new Date().getFullYear(), m[1], m[2], m[3], m[4] || '00');
+  m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) return todayStr() + 'T' + pad2(m[1]) + ':' + m[2];
+  return '';
+}
+
+function resvWhenDate(when) {
+  const m = String(when || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0), 0, 0);
+}
+
+function resvDayStart(ts) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function resvWhenLabel(when) {
+  const d = resvWhenDate(when);
+  if (!d) return '';
+  const base = (d.getMonth() + 1) + '월 ' + d.getDate() + '일 (' + WEEKDAY[d.getDay()] + ')';
+  return /T\d{2}:\d{2}$/.test(String(when)) ? base + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) : base;
+}
+
+function resvWhenSheet(when) {
+  if (!when) return '';
+  return String(when).slice(0, 10) + (String(when).indexOf('T') > 0 ? ' ' + String(when).slice(11, 16) : '');
+}
+
+function resvDayTag(r) {
+  if (r.done) return { label: '완료', cls: 'done' };
+  const d = resvWhenDate(r.when);
+  if (!d) return null;
+  const diff = Math.round((resvDayStart(d.getTime()) - resvDayStart(Date.now())) / 86400000);
+  if (diff === 0) return { label: '오늘', cls: 'today' };
+  if (diff === 1) return { label: '내일', cls: 'today' };
+  if (diff > 1) return { label: 'D-' + diff, cls: 'soon' };
+  return { label: Math.abs(diff) + '일 지남', cls: 'past' };
+}
+
+function resvAgo(ts) {
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 60) return '방금 전';
+  const min = Math.round(sec / 60);
+  if (min < 60) return min + '분 전';
+  const hour = Math.round(min / 60);
+  if (hour < 24) return hour + '시간 전';
+  const d = new Date(ts);
+  return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+}
+
+function resvSampleSeed() {
+  const plus = (n, time) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return toStr(d) + (time ? 'T' + time : '');
+  };
+  return [
+    {
+      name: '김지은 (예시)',
+      addr: '서울 마포구 성산동 · ○○아파트 101동',
+      qty: '벽걸이 2대',
+      when: plus(2, '10:00'),
+      done: false,
+      memo: '오전 방문 요청 · 주차는 지하 2층',
+      sample: true
+    },
+    {
+      name: '박현수 (예시)',
+      addr: '경기 성남시 분당구 · ○○오피스텔',
+      qty: '벽걸이 1대 · 스탠드 1대',
+      when: plus(-3, '14:00'),
+      done: true,
+      memo: '현장 카드 결제 완료 · 세금계산서 요청',
+      sample: true
+    }
+  ].map(r => normalizeResv(Object.assign({ id: uid() }, r)));
+}
+
+function normalizeResv(r) {
+  if (!r || typeof r !== 'object') return null;
+  const when = resvWhenNormalize(r.when);
+  const rowNum = toNum(r.row);
+  return {
+    id: String(r.id || uid()),
+    name: String(r.name == null ? '' : r.name),
+    addr: String(r.addr == null ? '' : r.addr),
+    qty: String(r.qty == null ? '' : r.qty),
+    when: when,
+    whenText: when ? '' : String(r.whenText || ''),
+    done: !!r.done,
+    memo: String(r.memo == null ? '' : r.memo),
+    sample: !!r.sample,
+    row: rowNum >= 2 ? rowNum : null,
+    pending: !!r.pending,
+    updatedAt: Number(r.updatedAt) || Date.now()
+  };
+}
+
+function resvNormalizeList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeResv).filter(Boolean);
+}
+
+/* ------------------------------ 계산 ------------------------------ */
+function resvStats() {
+  const list = resvList();
+  const today = resvDayStart(Date.now());
+  let open = 0, upcoming = 0, done = 0;
+  list.forEach(r => {
+    if (r.done) { done += 1; return; }
+    open += 1;
+    const d = resvWhenDate(r.when);
+    if (d && resvDayStart(d.getTime()) >= today) upcoming += 1;
+  });
+  return { all: list.length, open: open, upcoming: upcoming, done: done };
+}
+
+function resvSort(a, b) {
+  if (!!a.done !== !!b.done) return a.done ? 1 : -1;
+  const da = resvWhenDate(a.when), db = resvWhenDate(b.when);
+  const ta = da ? da.getTime() : Infinity;
+  const tb = db ? db.getTime() : Infinity;
+  if (ta !== tb) return a.done ? tb - ta : ta - tb;
+  return String(a.name).localeCompare(String(b.name), 'ko');
+}
+
+function resvFiltered() {
+  const today = resvDayStart(Date.now());
+  const q = resvQuery.trim().toLowerCase();
+  let list = resvList().slice();
+
+  if (resvFilter === 'open') list = list.filter(r => !r.done);
+  else if (resvFilter === 'done') list = list.filter(r => r.done);
+  else if (resvFilter === 'upcoming') list = list.filter(r => {
+    if (r.done) return false;
+    const d = resvWhenDate(r.when);
+    return !!d && resvDayStart(d.getTime()) >= today;
+  });
+
+  if (q) {
+    list = list.filter(r => [r.name, r.addr, r.qty, r.memo, r.whenText, resvWhenLabel(r.when)]
+      .join(' ').toLowerCase().indexOf(q) >= 0);
+  }
+  return list.sort(resvSort);
+}
+
+/* ------------------------------ 렌더 ------------------------------ */
+function renderResvSyncBar() {
+  const cfg = resvSyncCfg();
+  const dot = $('#resvSyncDot');
+  if (!dot) return;
+  const failed = !!cfg.lastError;
+  dot.className = 'rs-dot ' + (!cfg.url ? 'off' : (failed ? 'err' : (resvBusy ? 'busy' : 'ok')));
+  $('#resvSyncTitle').textContent = !cfg.url ? '시트 연동 전' : (failed ? '시트 연동 · 확인 필요' : '시트 연동됨');
+
+  let desc;
+  if (!cfg.url) desc = '연결하면 예약이 구글시트와 양방향으로 맞춰집니다.';
+  else if (resvBusy) desc = '시트와 맞추는 중…';
+  else if (failed) desc = cfg.lastError;
+  else if (cfg.lastSyncAt) desc = '마지막 동기화 ' + resvAgo(cfg.lastSyncAt);
+  else desc = '아직 한 번도 동기화하지 않았습니다. [지금 동기화]를 눌러 주세요.';
+  $('#resvSyncDesc').textContent = desc;
+
+  const btn = $('#resvSyncNow');
+  btn.disabled = !cfg.url || resvBusy;
+}
+
+function renderResvSampleBanner() {
+  const el = $('#resvSampleBanner');
+  if (!el) return;
+  const n = resvList().filter(r => r.sample).length;
+  if (!n) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.innerHTML =
+    '<div class="banner-text"><div><strong>예시 예약 ' + n + '건이 들어 있습니다.</strong> 화면을 확인해 보고 실제 예약으로 시작하려면 지워 주세요.</div></div>' +
+    '<div class="banner-actions"><button type="button" class="btn btn-sm" data-resv-act="clear-sample">예시 예약 지우기</button></div>';
+}
+
+function resvEmptyHtml() {
+  if (resvQuery.trim()) return '<li class="empty">‘' + esc(resvQuery.trim()) + '’ 검색 결과가 없습니다.</li>';
+  if (resvFilter === 'done') return '<li class="empty">완료한 예약이 없습니다.</li>';
+  if (resvFilter === 'open' || resvFilter === 'upcoming') return '<li class="empty">미완료 예약이 없습니다. 모두 끝냈습니다.</li>';
+  return '<li class="empty">예약이 없습니다.<br><b>+ 새 예약</b>으로 첫 예약을 넣어 보세요.</li>';
+}
+
+function resvCardHtml(r) {
+  const tag = resvDayTag(r);
+  const whenTxt = resvWhenLabel(r.when) || r.whenText;
+  const cfg = resvSyncCfg();
+  const html = [];
+  html.push('<li class="resv-card' + (r.done ? ' is-done' : '') + '" data-resv-id="' + esc(r.id) + '">');
+  html.push('<button type="button" class="rc-check" data-resv-act="toggle" role="checkbox" aria-checked="' +
+    (r.done ? 'true' : 'false') + '" aria-label="' + esc(r.name || '예약') + ' 완료 표시">' +
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg></button>');
+  html.push('<div class="rc-body">');
+  html.push('<div class="rc-top"><strong class="rc-name">' + esc(r.name || '이름 없음') + '</strong>' +
+    (tag ? '<span class="rc-tag ' + tag.cls + '">' + esc(tag.label) + '</span>' : '') +
+    (r.sample ? '<span class="rc-tag sample">예시</span>' : '') + '</div>');
+  if (whenTxt) html.push('<div class="rc-when">' + esc(whenTxt) + '</div>');
+  if (r.addr) html.push('<div class="rc-addr">' + esc(r.addr) + '</div>');
+  const chips = [];
+  if (r.qty) chips.push('<span class="rc-chip">' + esc(r.qty) + '</span>');
+  if (cfg.url && r.pending) chips.push('<span class="rc-chip pending">시트 전송 대기</span>');
+  if (chips.length) html.push('<div class="rc-meta">' + chips.join('') + '</div>');
+  if (r.memo) html.push('<p class="rc-memo">' + esc(r.memo) + '</p>');
+  html.push('<div class="rc-actions"><button type="button" data-resv-act="edit">수정</button>' +
+    '<button type="button" data-resv-act="del" class="del">삭제</button></div>');
+  html.push('</div></li>');
+  return html.join('');
+}
+
+function renderResvNavCount(st) {
+  const n = st ? st.upcoming : resvStats().upcoming;
+  ['#resvNavCount', '#resvNavCountTop'].forEach(sel => {
+    const el = $(sel);
+    if (!el) return;
+    el.textContent = String(n);
+    el.hidden = n === 0;
+  });
+}
+
+function renderResv() {
+  if (!state.data) return;
+  renderResvSyncBar();
+  renderResvSampleBanner();
+
+  const st = resvStats();
+  $('#resvStatAll').textContent = String(st.all);
+  $('#resvStatOpen').textContent = String(st.open);
+  $('#resvStatUp').textContent = String(st.upcoming);
+
+  $$('#resvFilter button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.resvFilter === resvFilter)));
+  $$('[data-resv-stat]').forEach(b => b.classList.toggle('is-active', b.dataset.resvStat === resvFilter));
+
+  const search = $('#resvSearch');
+  if (search && search.value !== resvQuery) search.value = resvQuery;
+
+  const list = resvFiltered();
+  $('#resvList').innerHTML = list.length ? list.map(resvCardHtml).join('') : resvEmptyHtml();
+
+  const names = { all: '전체', open: '미완료', upcoming: '예정', done: '완료' };
+  $('#resvHint').textContent = names[resvFilter] + ' ' + list.length + '건 · 예정은 미완료 중 예약일이 남은 예약입니다. 완료는 동그라미를 한 번 누르면 됩니다.';
+
+  renderResvNavCount(st);
+}
+
+/* ------------------------------ 모달 ------------------------------ */
+let resvModalOpener = null;
+
+function openResvModal(id, opener) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  resvModalOpener = opener || document.activeElement;
+  el.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeResvModal(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.hidden = true;
+  if (!document.querySelector('.modal:not([hidden])')) document.body.classList.remove('modal-open');
+  if (resvModalOpener && resvModalOpener.focus) {
+    try { resvModalOpener.focus(); } catch (err) { /* 무시 */ }
+  }
+  resvModalOpener = null;
+}
+
+function closeAllResvModals() {
+  $$('.modal').forEach(el => { el.hidden = true; });
+  document.body.classList.remove('modal-open');
+}
+
+/* ------------------------------ 예약 추가·수정 ------------------------------ */
+function openResvForm(r) {
+  resvEditing = r ? r.id : null;
+  $('#resvFormTitle').textContent = r ? '예약 수정' : '새 예약';
+  $('#resvFormDelete').hidden = !r;
+
+  $('#rvName').value = r ? r.name : '';
+  $('#rvAddr').value = r ? r.addr : '';
+  $('#rvQty').value = r ? r.qty : '';
+  $('#rvMemo').value = r ? r.memo : '';
+  $('#rvDone').checked = !!(r && r.done);
+
+  const when = r ? r.when : '';
+  $('#rvDate').value = r ? String(when).slice(0, 10) : todayStr();
+  $('#rvTime').value = when && String(when).indexOf('T') > 0 ? String(when).slice(11, 16) : '';
+
+  openResvModal('resvModal', r ? document.activeElement : $('#resvAddBtn'));
+  setTimeout(() => { try { $('#rvName').focus(); } catch (err) { /* 무시 */ } }, 60);
+}
+
+function saveResvForm(ev) {
+  if (ev) ev.preventDefault();
+  const name = $('#rvName').value.trim();
+  if (!name) {
+    toast('고객명을 넣어 주세요.');
+    $('#rvName').focus();
+    return;
+  }
+  const date = $('#rvDate').value;
+  const time = $('#rvTime').value;
+  const when = date ? (time ? date + 'T' + time : date) : '';
+  const fields = {
+    name: name,
+    addr: $('#rvAddr').value.trim(),
+    qty: $('#rvQty').value.trim(),
+    when: when,
+    done: $('#rvDone').checked,
+    memo: $('#rvMemo').value.trim()
+  };
+
+  const editing = resvEditing ? resvById(resvEditing) : null;
+  if (editing) {
+    Object.assign(editing, fields, {
+      whenText: '',
+      sample: false,
+      pending: !!resvSyncCfg().url,
+      updatedAt: Date.now()
+    });
+  } else {
+    resvList().push(normalizeResv(Object.assign({ id: uid() }, fields, { pending: !!resvSyncCfg().url })));
+  }
+
+  save();
+  closeResvModal('resvModal');
+  resvEditing = null;
+  renderResv();
+  toast(editing ? '예약을 고쳤습니다.' : '예약을 추가했습니다.');
+  resvSchedulePush();
+}
+
+function resvToggle(r) {
+  r.done = !r.done;
+  r.updatedAt = Date.now();
+  r.pending = !!resvSyncCfg().url;
+  save();
+  renderResv();
+  toast(r.done ? '완료로 표시했습니다.' : '미완료로 되돌렸습니다.');
+  resvSchedulePush();
+}
+
+function resvDelete(r, skipConfirm) {
+  const cfg = resvSyncCfg();
+  const willSheet = !!(cfg.url && r.row);
+  if (!skipConfirm) {
+    const msg = (r.name || '예약') + ' 예약을 삭제할까요?' + (willSheet ? '\n구글시트에서도 함께 지워집니다.' : '');
+    if (!confirm(msg)) return;
+  }
+  if (willSheet) cfg.pendingDeletes.push({ row: r.row, name: r.name });
+  state.data.reservations = resvList().filter(x => x.id !== r.id);
+  save();
+  closeResvModal('resvModal');
+  renderResv();
+  toast('삭제했습니다.');
+  resvSchedulePush();
+}
+
+function clearResvSample() {
+  const n = resvList().filter(r => r.sample).length;
+  if (!n) { toast('지울 예시 예약이 없습니다.'); return; }
+  if (!confirm('예시 예약 ' + n + '건을 지울까요?')) return;
+  state.data.reservations = resvList().filter(r => !r.sample);
+  save();
+  renderResv();
+  toast('예시 예약을 지웠습니다.');
+}
+
+/* ------------------------------ 시트 연동 ------------------------------ */
+function resvJsonp(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const name = '__resvCb' + (++resvJsonpSeq);
+    const script = document.createElement('script');
+    let settled = false;
+    const cleanup = () => {
+      try { delete window[name]; } catch (err) { window[name] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('응답 시간이 초과됐습니다.'));
+    }, timeoutMs || 20000);
+
+    window[name] = (data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      resolve(data);
+    };
+    script.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('시트에 연결하지 못했습니다. 웹 앱 배포(액세스: 모든 사용자)와 주소를 확인해 주세요.'));
+    };
+    script.async = true;
+    script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + name;
+    document.body.appendChild(script);
+  });
+}
+
+function resvApi(action, payload) {
+  const cfg = resvSyncCfg();
+  if (!cfg.url) return Promise.reject(new Error('시트 연동 주소가 없습니다.'));
+  const params = new URLSearchParams();
+  params.set('action', action);
+  if (cfg.token) params.set('t', cfg.token);
+  if (payload) params.set('data', JSON.stringify(payload));
+  params.set('_', String(Date.now()));
+  const url = cfg.url + (cfg.url.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+  return resvJsonp(url).then(res => {
+    if (!res || res.ok !== true) throw new Error((res && res.error) || '시트가 오류를 돌려보냈습니다.');
+    return res;
+  });
+}
+
+function resvSheetPayload(r) {
+  const item = {
+    name: r.name || '',
+    addr: r.addr || '',
+    qty: r.qty || '',
+    done: !!r.done,
+    memo: r.memo || ''
+  };
+  if (r.when) item.when = resvWhenSheet(r.when);
+  return item;
+}
+
+function resvApplyRemote(it, rem) {
+  it.name = String(rem.name == null ? '' : rem.name);
+  it.addr = String(rem.addr == null ? '' : rem.addr);
+  it.qty = String(rem.qty == null ? '' : rem.qty);
+  it.memo = String(rem.memo == null ? '' : rem.memo);
+  const when = resvWhenNormalize(rem.when);
+  it.when = when;
+  it.whenText = when ? '' : String(rem.when == null ? '' : rem.when);
+  it.done = (rem.done === true) ||
+    (typeof rem.done === 'string' && RESV_DONE_WORDS.indexOf(rem.done.trim().toLowerCase()) >= 0);
+  it.row = Number(rem.row) || null;
+  it.pending = false;
+  it.sample = false;
+}
+
+/** 시트 목록을 로컬에 합칩니다. 시트가 기준이되, 앱에서 고친(pending) 항목은 앱이 우선입니다. */
+function resvMergeRemote(remote) {
+  const cfg = resvSyncCfg();
+  const list = resvList();
+  const rows = (remote || []).filter(x => x && Number(x.row) >= 2);
+  const skip = new Set((cfg.pendingDeletes || []).map(d => Number(d.row)));
+  const byRow = new Map();
+  rows.forEach(x => {
+    const n = Number(x.row);
+    if (!skip.has(n)) byRow.set(n, x);
+  });
+
+  // 시트가 통째로 비어 있으면(실수로 지운 경우) 로컬 기록을 잃지 않도록 다시 올립니다.
+  const sheetEmpty = byRow.size === 0;
+
+  const claimed = new Set();
+  const next = [];
+  let dropped = 0;
+
+  list.forEach(it => {
+    if (it.sample) { next.push(it); return; }
+    if (it.pending) {
+      if (it.row) claimed.add(Number(it.row));
+      next.push(it);
+      return;
+    }
+    if (sheetEmpty && it.row) {
+      it.row = null;
+      it.pending = true;
+      next.push(it);
+      return;
+    }
+
+    let rem = it.row ? byRow.get(Number(it.row)) : null;
+    if (rem && !resvSameName(it, rem)) {
+      const alt = rows.find(x => !claimed.has(Number(x.row)) && resvKeyOf(x) === resvKeyOf(it));
+      if (alt) rem = alt;
+    }
+    if (!rem && !it.row) {
+      rem = rows.find(x => !claimed.has(Number(x.row)) && resvKeyOf(x) === resvKeyOf(it)) || null;
+    }
+
+    if (rem) {
+      claimed.add(Number(rem.row));
+      resvApplyRemote(it, rem);
+      next.push(it);
+      return;
+    }
+    if (it.row) { dropped += 1; return; }  // 시트에서 지워진 예약
+    next.push(it);                          // 아직 시트에 없는 로컬 예약
+  });
+
+  byRow.forEach((x, row) => {
+    if (claimed.has(row)) return;
+    const item = normalizeResv({ id: uid() });
+    resvApplyRemote(item, x);
+    next.push(item);
+  });
+
+  state.data.reservations = next;
+  return dropped;
+}
+
+/** 앱에서 고친 것과 삭제 대기를 시트로 보냅니다. 보낸 개수를 돌려줍니다. */
+function resvPushPending() {
+  const cfg = resvSyncCfg();
+  const work = [];
+  let ops = 0;
+
+  const dels = (cfg.pendingDeletes || []).slice().sort((a, b) => Number(b.row) - Number(a.row));
+  for (let i = 0; i < dels.length; i++) {
+    const d = dels[i];
+    work.push(
+      resvApi('delete', { row: Number(d.row), name: d.name })
+        .then(() => {
+          cfg.pendingDeletes = (cfg.pendingDeletes || []).filter(x => x !== d);
+          ops += 1;
+        })
+        .catch(err => {
+          const msg = String((err && err.message) || err);
+          if (msg.indexOf('행이 없습니다') >= 0 || msg.indexOf('행 번호가 없습니다') >= 0 || msg.indexOf('skipped') >= 0) {
+            cfg.pendingDeletes = (cfg.pendingDeletes || []).filter(x => x !== d);
+            return;
+          }
+          throw err;
+        })
+    );
+  }
+
+  resvList().forEach(it => {
+    if (it.sample) return;
+    if (!it.pending && it.row) return;
+    if (!it.pending && !it.row) it.pending = true;
+
+    work.push((async () => {
+      const payload = { item: resvSheetPayload(it) };
+      if (it.row) {
+        try {
+          await resvApi('update', { row: it.row, item: payload.item });
+        } catch (err) {
+          it.row = null;  // 그 행이 사라졌으면 아래에서 새로 추가
+        }
+      }
+      if (!it.row) {
+        const res = await resvApi('append', payload);
+        it.row = Number(res.row) || null;
+      }
+      it.pending = false;
+      ops += 1;
+      save();
+    })());
+  });
+
+  return Promise.all(work).then(() => ops);
+}
+
+function resvSchedulePush() {
+  if (!resvSyncCfg().url) return;
+  clearTimeout(resvPushTimer);
+  resvPushTimer = setTimeout(() => { resvSyncNow({ silent: true }); }, 700);
+}
+
+function resvSyncNow(opts) {
+  opts = opts || {};
+  const cfg = resvSyncCfg();
+  if (!cfg.url) {
+    if (!opts.silent) { openResvSetup(); }
+    return Promise.resolve(false);
+  }
+  if (resvBusy) { resvAgain = true; return Promise.resolve(false); }
+
+  resvBusy = true;
+  resvLastAutoPull = Date.now();
+  renderResvSyncBar();
+  if (opts.fromSetup) setResvSetupState('', '시트와 연결을 확인하는 중…');
+
+  return resvApi('list')
+    .then(res => {
+      const dropped = resvMergeRemote(res.items || []);
+      return resvPushPending().then(pushed => ({ pushed: pushed, dropped: dropped, count: res.items ? res.items.length : 0 }));
+    })
+    .then(info => {
+      cfg.lastSyncAt = Date.now();
+      cfg.lastError = '';
+      save();
+      resvBusy = false;
+      renderResvSyncBar();
+      renderResv();
+      if (opts.fromSetup || !opts.silent) {
+        const msg = '시트와 연결됐습니다 · 시트 ' + info.count + '건' + (info.pushed ? ' · ' + info.pushed + '건 반영' : '');
+        if (opts.fromSetup) setResvSetupState('ok', msg + ' 이제 예약을 고치면 시트로 바로 보내고, 앱을 열 때 시트 내용을 받아옵니다.');
+        toast(msg);
+      }
+      if (info.dropped > 0 && !opts.silent) toast('시트에서 지워진 예약 ' + info.dropped + '건을 정리했습니다.');
+      return true;
+    })
+    .catch(err => {
+      resvBusy = false;
+      cfg.lastError = String((err && err.message) || err);
+      save();
+      renderResvSyncBar();
+      if (opts.fromSetup) setResvSetupState('err', cfg.lastError);
+      if (!opts.silent || opts.fromSetup) toast('시트 연동 실패: ' + cfg.lastError);
+      return false;
+    })
+    .then(ok => {
+      if (resvAgain) {
+        resvAgain = false;
+        setTimeout(() => { resvSyncNow({ silent: true }); }, 400);
+      }
+      return ok;
+    });
+}
+
+/* ------------------------------ 연동 설정 ------------------------------ */
+function setResvSetupState(kind, text) {
+  const el = $('#resvSetupState');
+  if (!el) return;
+  el.className = 'resv-setup-state' + (kind ? ' ' + kind : '');
+  el.textContent = text || '';
+}
+
+function openResvSetup() {
+  const cfg = resvSyncCfg();
+  $('#resvUrl').value = cfg.url;
+  $('#resvToken').value = cfg.token;
+  $('#resvCodeView').textContent = RESV_CODE_GS;
+  setResvSetupState(cfg.url && !cfg.lastError ? 'ok' : (cfg.lastError ? 'err' : ''),
+    cfg.lastError || (cfg.url ? '연결되어 있습니다. 마지막 동기화 ' + (cfg.lastSyncAt ? resvAgo(cfg.lastSyncAt) : '없음') : ''));
+  openResvModal('resvSetupModal', $('#resvSetupBtn'));
+}
+
+function resvSaveCfg() {
+  const url = $('#resvUrl').value.trim().replace(/\s/g, '');
+  const token = $('#resvToken').value.trim();
+  if (!url) { setResvSetupState('err', '웹 앱 URL을 넣어 주세요.'); return; }
+  if (!/^https:\/\/script\.google\.com\//.test(url)) {
+    setResvSetupState('err', '웹 앱 URL은 https://script.google.com/macros/s/…/exec 형태여야 합니다.');
+    return;
+  }
+  const cfg = resvSyncCfg();
+  cfg.url = url;
+  cfg.token = token;
+  cfg.lastError = '';
+  save();
+  setResvSetupState('ok', '저장했습니다. 시트와 연결을 확인합니다…');
+  resvSyncNow({ fromSetup: true });
+}
+
+function resvClearCfg() {
+  const cfg = resvSyncCfg();
+  if (!cfg.url) { setResvSetupState('', '연결된 주소가 없습니다.'); return; }
+  if (!confirm('시트 연동을 끊을까요?\n화면의 예약은 그대로 남고, 더 이상 시트와 맞추지 않습니다.')) return;
+  cfg.url = '';
+  cfg.token = '';
+  cfg.lastError = '';
+  cfg.lastSyncAt = 0;
+  save();
+  $('#resvUrl').value = '';
+  $('#resvToken').value = '';
+  setResvSetupState('', '연결을 끊었습니다.');
+  renderResv();
+  toast('시트 연동을 끊었습니다.');
+}
+
+function resvCopyCode() {
+  const done = () => {
+    setResvSetupState('ok', 'Code.gs를 복사했습니다. 시트의 Apps Script 창에 붙여넣고 저장(Ctrl+S)하세요.');
+    toast('Code.gs를 복사했습니다.');
+  };
+  const text = RESV_CODE_GS;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => resvCopyFallback(text, done));
+  } else {
+    resvCopyFallback(text, done);
+  }
+}
+
+function resvCopyFallback(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '-2000px';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+  ta.remove();
+  if (ok) done();
+  else setResvSetupState('err', '복사가 막혀 있습니다. 위 [코드 보기]를 열어 직접 선택해 복사해 주세요.');
+}
+
+function resvDownloadCode() {
+  download('통화예약_Code.gs', RESV_CODE_GS, 'text/plain;charset=utf-8');
+  toast('Code.gs 파일을 내려받았습니다.');
+}
+
+/* ------------------------------ 이벤트 ------------------------------ */
+function wireResvEvents() {
+  document.addEventListener('click', ev => {
+    const closeBtn = ev.target.closest('[data-close]');
+    if (closeBtn) {
+      const kind = closeBtn.dataset.close;
+      closeResvModal(kind === 'setup' ? 'resvSetupModal' : 'resvModal');
+      return;
+    }
+    const resvAct = ev.target.closest('[data-resv-act]');
+    if (!resvAct) return;
+    const act = resvAct.dataset.resvAct;
+    if (act === 'clear-sample') { clearResvSample(); return; }
+    const card = resvAct.closest('[data-resv-id]');
+    const r = card ? resvById(card.dataset.resvId) : null;
+    if (!r) return;
+    if (act === 'toggle') resvToggle(r);
+    else if (act === 'edit') openResvForm(r);
+    else if (act === 'del') resvDelete(r);
+  });
+
+  $('#resvAddBtn').addEventListener('click', () => openResvForm(null));
+  $('#resvForm').addEventListener('submit', saveResvForm);
+  $('#resvFormDelete').addEventListener('click', () => {
+    const r = resvEditing ? resvById(resvEditing) : null;
+    if (r) resvDelete(r);
+  });
+
+  $$('[data-resv-quick]').forEach(b => b.addEventListener('click', () => {
+    const d = new Date();
+    if (b.dataset.resvQuick === 'tomorrow') d.setDate(d.getDate() + 1);
+    $('#rvDate').value = toStr(d);
+    if (!$('#rvTime').value) $('#rvTime').value = '10:00';
+  }));
+
+  $('#resvFilter').addEventListener('click', ev => {
+    const b = ev.target.closest('[data-resv-filter]');
+    if (!b) return;
+    resvFilter = b.dataset.resvFilter;
+    renderResv();
+  });
+
+  $$('[data-resv-stat]').forEach(b => b.addEventListener('click', () => {
+    resvFilter = b.dataset.resvStat;
+    renderResv();
+  }));
+
+  let qTimer = null;
+  $('#resvSearch').addEventListener('input', ev => {
+    resvQuery = ev.target.value;
+    clearTimeout(qTimer);
+    qTimer = setTimeout(renderResv, 120);
+  });
+
+  $('#resvSyncNow').addEventListener('click', () => resvSyncNow({}));
+  $('#resvSetupBtn').addEventListener('click', openResvSetup);
+  $('#resvSaveCfg').addEventListener('click', resvSaveCfg);
+  $('#resvCfgClear').addEventListener('click', resvClearCfg);
+  $('#resvCopyCode').addEventListener('click', resvCopyCode);
+  $('#resvDownloadCode').addEventListener('click', resvDownloadCode);
+
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape') return;
+    if (!document.querySelector('.modal:not([hidden])')) return;
+    closeAllResvModals();
+  });
+
+  window.addEventListener('online', () => {
+    if (resvSyncCfg().url) resvSyncNow({ silent: true });
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const cfg = resvSyncCfg();
+    if (!cfg.url) return;
+    if (Date.now() - resvLastAutoPull < 5 * 60 * 1000) return;
+    resvSyncNow({ silent: true });
+  });
+}
+
+function initResv() {
+  const datalist = $('#rvQtyPresets');
+  if (datalist) {
+    datalist.innerHTML = RESV_QTY_PRESETS.map(v => '<option value="' + esc(v) + '"></option>').join('');
+  }
+  wireResvEvents();
+  renderResv();
+  if (resvSyncCfg().url) {
+    setTimeout(() => { resvSyncNow({ silent: true }); }, 900);
+  }
+}
