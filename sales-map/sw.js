@@ -8,7 +8,7 @@
 'use strict';
 
 const VERSION = 'v1';
-const BUILD = '2';
+const BUILD = '3';
 const CACHE_PREFIX = 'haemil-sales-map-';
 const CACHE_NAME = CACHE_PREFIX + VERSION + '-' + BUILD;
 const RUNTIME = CACHE_PREFIX + 'runtime';
